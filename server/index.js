@@ -1209,6 +1209,50 @@ app.put("/solicitudes-cesion-turno/:id/rechazar", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+app.get("/bootstrap-coordinador", async (req, res) => {
+  try {
+    const username = "admin";
+    const passwordPlano = "Admin123*";
+    const passwordHash = await bcrypt.hash(passwordPlano, 10);
+
+    db.get(
+      "SELECT id FROM usuarios WHERE username = ?",
+      [username],
+      (err, row) => {
+        if (err) {
+          return res.status(500).json({ error: err.message });
+        }
+
+        if (row) {
+          return res.json({
+            ok: true,
+            mensaje: "El usuario coordinador ya existe",
+            username,
+          });
+        }
+
+        db.run(
+          "INSERT INTO usuarios (username, password, rol, medico_id) VALUES (?, ?, ?, NULL)",
+          [username, passwordHash, "coordinador"],
+          function (err2) {
+            if (err2) {
+              return res.status(500).json({ error: err2.message });
+            }
+
+            return res.json({
+              ok: true,
+              mensaje: "Coordinador creado correctamente",
+              username,
+              passwordTemporal: passwordPlano,
+            });
+          }
+        );
+      }
+    );
+  } catch (e) {
+    return res.status(500).json({ error: e.message });
+  }
+});
 
 /* ============================================================================
    START
