@@ -3090,6 +3090,21 @@ function VistaCalendario({
   agregarTurnoCoord,
   eliminarTurnoCoord,
 }) {
+  const [medicoCalendarioId, setMedicoCalendarioId] = useState("");
+  const medicoSeleccionado =
+    medicos.find((m) => Number(m.id) === Number(medicoCalendarioId)) || medicos[0] || null;
+
+  useEffect(() => {
+    if (!medicos.length) {
+      setMedicoCalendarioId("");
+      return;
+    }
+
+    if (!medicos.some((m) => Number(m.id) === Number(medicoCalendarioId))) {
+      setMedicoCalendarioId(String(medicos[0].id));
+    }
+  }, [medicos, medicoCalendarioId]);
+
   return (
     <section>
       <div className="tm-page-header" style={S.pageHeader}>
@@ -3147,6 +3162,64 @@ function VistaCalendario({
           <span style={{ ...S.legendPill, background: "#0f172a", color: "#94a3b8" }}>
             🏖️ Libre
           </span>
+        </div>
+
+        <div style={S.coordMedicoPanel}>
+          <div style={S.coordMedicoTop}>
+            <div>
+              <div style={S.configTitle}>Programar por medico</div>
+              <div style={S.configSub}>
+                Elige un medico y asigna sus turnos viendo el mes completo.
+              </div>
+            </div>
+
+            <select
+              value={medicoSeleccionado?.id || ""}
+              onChange={(e) => setMedicoCalendarioId(e.target.value)}
+              style={{ ...inputStyle(false), minWidth: 240 }}
+            >
+              {medicos.map((med) => (
+                <option key={med.id} value={med.id}>
+                  {med.nombre} {med.apellido}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div style={S.medicoPickerStrip}>
+            {medicos.map((med) => {
+              const active = Number(med.id) === Number(medicoSeleccionado?.id);
+
+              return (
+                <button
+                  type="button"
+                  key={med.id}
+                  onClick={() => setMedicoCalendarioId(String(med.id))}
+                  style={S.medicoPickerButton(active)}
+                >
+                  <Av color={med.color} size={28} fontSize={10}>
+                    {med.nombre?.[0]}
+                    {med.apellido?.[0]}
+                  </Av>
+                  <span>
+                    {med.nombre} {med.apellido}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+
+          {medicoSeleccionado && (
+            <CalendarioMedicoCoordinador
+              medico={medicoSeleccionado}
+              diasCoord={diasCoord}
+              getTurnosDia={getTurnosDia}
+              getHorasExtraDia={getHorasExtraDia}
+              horasDiaTotal={horasDiaTotal}
+              agregarTurnoCoord={agregarTurnoCoord}
+              eliminarTurnoCoord={eliminarTurnoCoord}
+            />
+          )}
         </div>
 
         <div className="tm-calendar-scroll" style={S.calendarScroll}>
@@ -3279,6 +3352,121 @@ function VistaCalendario({
         </div>
       </div>
     </section>
+  );
+}
+
+function CalendarioMedicoCoordinador({
+  medico,
+  diasCoord,
+  getTurnosDia,
+  getHorasExtraDia,
+  horasDiaTotal,
+  agregarTurnoCoord,
+  eliminarTurnoCoord,
+}) {
+  return (
+    <div className="tm-medico-calendar-wrap" style={{ ...S.medicoCalendarWrap, marginBottom: 0 }}>
+      <div className="tm-medico-week-row">
+        {["LUN", "MAR", "MIE", "JUE", "VIE", "SAB", "DOM"].map((d) => (
+          <div key={d} className="tm-medico-week-label">
+            {d}
+          </div>
+        ))}
+      </div>
+
+      <div className="tm-medico-calendar-grid" style={S.medicoCalendarGrid}>
+        {diasCoord.map((d) => {
+          const f = isoDate(d);
+          const tipos = turnosDiaOrdenados(getTurnosDia(medico.id, f));
+          const extra = getHorasExtraDia(medico.id, f);
+          const total = horasDiaTotal(medico.id, f);
+          const esHoy = f === HOY_ISO;
+          const esFin = isWE(d);
+
+          return (
+            <div
+              key={f}
+              className="tm-medico-day-card"
+              style={{
+                ...S.medicoDayCard,
+                border: `1px solid ${esHoy ? "#60a5fa" : esFin ? "#374151" : "#1e293b"}`,
+                boxShadow: esHoy ? "0 0 0 1px rgba(96,165,250,0.45)" : "none",
+              }}
+            >
+              <div className="tm-medico-day-head" style={S.medicoDayHead}>
+                <span className="tm-medico-day-name" style={S.medicoDayName}>
+                  {diaLabel(d)}
+                </span>
+
+                <span
+                  className="tm-medico-day-number"
+                  style={{
+                    ...S.medicoDayNumber,
+                    color: esHoy ? "#60a5fa" : esFin ? "#c4b5fd" : "#e5e7eb",
+                  }}
+                >
+                  {diaNumero(d)}
+                </span>
+              </div>
+
+              <div className="tm-medico-shift-list" style={S.medicoShiftList}>
+                {tipos.length === 0 && (
+                  <div className="tm-medico-free-chip" style={S.medicoFreeChip}>
+                    Libre
+                  </div>
+                )}
+
+                {tipos.map((tipo) => (
+                  <button
+                    type="button"
+                    key={tipo}
+                    onClick={() => eliminarTurnoCoord(medico.id, f, tipo)}
+                    className="tm-medico-shift-chip"
+                    style={{ ...S.medicoShiftChip(TIPOS_TURNO[tipo]), cursor: "pointer" }}
+                    title="Clic para quitar este turno"
+                  >
+                    <span>{TIPOS_TURNO[tipo].emoji}</span>
+                    <span>{TIPOS_TURNO[tipo].label}</span>
+                  </button>
+                ))}
+
+                {extra > 0 && (
+                  <div className="tm-medico-shift-chip" style={S.medicoExtraChip}>
+                    <span>+</span>
+                    <span>{extra}h</span>
+                  </div>
+                )}
+              </div>
+
+              <div style={S.coordDayActions}>
+                {Object.keys(TIPOS_TURNO)
+                  .filter((tipo) => tipo !== "FDS" || esFin)
+                  .map((tipo) => {
+                    const disabled = tipos.includes(tipo);
+
+                    return (
+                      <button
+                        type="button"
+                        key={tipo}
+                        onClick={() => agregarTurnoCoord(medico.id, f, tipo)}
+                        disabled={disabled}
+                        style={S.quickShiftButton(TIPOS_TURNO[tipo], disabled)}
+                        title={disabled ? "Turno ya asignado" : `Agregar ${TIPOS_TURNO[tipo].label}`}
+                      >
+                        {TIPOS_TURNO[tipo].emoji}
+                      </button>
+                    );
+                  })}
+              </div>
+
+              <div className="tm-medico-day-total" style={S.medicoDayTotal}>
+                {total}h
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 
@@ -4247,6 +4435,65 @@ const S = {
     fontSize: 10,
     fontWeight: 900,
   },
+
+  coordMedicoPanel: {
+    background: "#081120",
+    border: "1px solid #1e293b",
+    borderRadius: 14,
+    padding: 14,
+    marginBottom: 16,
+  },
+
+  coordMedicoTop: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: 12,
+    flexWrap: "wrap",
+    marginBottom: 12,
+  },
+
+  medicoPickerStrip: {
+    display: "flex",
+    gap: 8,
+    overflowX: "auto",
+    paddingBottom: 8,
+    marginBottom: 12,
+  },
+
+  medicoPickerButton: (active) => ({
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 8,
+    flex: "0 0 auto",
+    border: `1px solid ${active ? "#3b82f6" : "#1f2937"}`,
+    background: active ? "#1e3a5f" : "#111827",
+    color: active ? "#bfdbfe" : "#cbd5e1",
+    borderRadius: 10,
+    padding: "7px 10px",
+    fontSize: 12,
+    fontWeight: 900,
+    cursor: "pointer",
+  }),
+
+  coordDayActions: {
+    display: "grid",
+    gridTemplateColumns: "repeat(3, 1fr)",
+    gap: 5,
+    marginTop: 8,
+  },
+
+  quickShiftButton: (tipo, disabled) => ({
+    background: disabled ? "#111827" : tipo.bg,
+    color: disabled ? "#475569" : tipo.color,
+    border: `1px solid ${disabled ? "#1f2937" : `${tipo.color}55`}`,
+    borderRadius: 7,
+    minHeight: 28,
+    fontSize: 13,
+    fontWeight: 900,
+    cursor: disabled ? "not-allowed" : "pointer",
+    opacity: disabled ? 0.55 : 1,
+  }),
 
   turnoLibre: {
     background: "#111827",
