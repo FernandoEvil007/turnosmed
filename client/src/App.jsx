@@ -107,6 +107,7 @@ const FORM0 = {
   cargo: "Médico Hospitalario",
   torre_asignada: "",
   piso_asignado: "",
+  pisos_asignados: [],
 };
 
 const EXTRA_FORM0 = {
@@ -123,6 +124,7 @@ const MEDICO_EXTRA_FORM0 = {
 };
 
 const PACIENTE_FORM0 = {
+  piso_key: "",
   cama: "",
   nombre_paciente: "",
   diagnostico: "",
@@ -304,12 +306,56 @@ function horaSalidaTurnos(tipos = []) {
 }
 
 function pisoMedicoLabel(medico) {
-  const torre = medico?.torre_asignada || "Sin torre";
-  const piso = medico?.piso_asignado
-    ? String(medico.piso_asignado).toUpperCase()
-    : "Sin piso";
+  const pisos = pisosAsignadosMedico(medico);
 
-  return `${torre} / ${piso}`;
+  if (pisos.length > 1) {
+    return pisos
+      .map((item) => `${item.torre} / ${String(item.piso).toUpperCase()}`)
+      .join(", ");
+  }
+
+  const torre = pisos[0]?.torre || medico?.torre_asignada || "Sin torre";
+  const piso = pisos[0]?.piso || medico?.piso_asignado;
+
+  return `${torre} / ${piso ? String(piso).toUpperCase() : "Sin piso"}`;
+}
+
+function pisoKey(torre, piso) {
+  return `${torre}|${piso}`;
+}
+
+function parsePisoKey(value) {
+  const [torre, piso] = String(value || "").split("|");
+  return { torre, piso };
+}
+
+function pisosAsignadosMedico(medico) {
+  if (Array.isArray(medico?.pisos_asignados) && medico.pisos_asignados.length) {
+    return medico.pisos_asignados
+      .map((item) => ({
+        torre: item?.torre || item?.torre_asignada,
+        piso: item?.piso || item?.piso_asignado,
+      }))
+      .filter((item) => item.torre && item.piso);
+  }
+
+  if (medico?.torre_asignada && medico?.piso_asignado) {
+    return [{ torre: medico.torre_asignada, piso: medico.piso_asignado }];
+  }
+
+  return [];
+}
+
+function pisoAsignadoExiste(pisos, torre, piso) {
+  return (pisos || []).some((item) => item.torre === torre && item.piso === piso);
+}
+
+function togglePisoAsignado(pisos, torre, piso) {
+  if (pisoAsignadoExiste(pisos, torre, piso)) {
+    return (pisos || []).filter((item) => !(item.torre === torre && item.piso === piso));
+  }
+
+  return [...(pisos || []), { torre, piso }];
 }
 
 function puedeAgregarTurno(tiposActuales = [], tipoNuevo, fecha = "") {
@@ -912,8 +958,7 @@ export default function App() {
 
     if (!form.nombre.trim()) e.nombre = "Requerido";
     if (!form.apellido.trim()) e.apellido = "Requerido";
-    if (!form.torre_asignada) e.torre_asignada = "Requerido";
-    if (!form.piso_asignado) e.piso_asignado = "Requerido";
+    if (!pisosAsignadosMedico(form).length) e.pisos_asignados = "Selecciona al menos un piso";
 
     if (!doc) {
       e.documento = "Requerido";
@@ -955,6 +1000,8 @@ export default function App() {
     setSaving(true);
 
     try {
+      const pisosAsignados = pisosAsignadosMedico(form);
+      const pisoPrincipal = pisosAsignados[0] || {};
       const medicoPayload = {
         ...form,
         nombre: form.nombre.trim(),
@@ -963,6 +1010,9 @@ export default function App() {
         registro_medico: form.registro_medico.trim(),
         telefono: form.telefono.trim(),
         email: form.email.trim(),
+        torre_asignada: pisoPrincipal.torre || "",
+        piso_asignado: pisoPrincipal.piso || "",
+        pisos_asignados: pisosAsignados,
         color: editId
           ? medicos.find((m) => m.id === editId)?.color || colorIdx(medicos.length)
           : colorIdx(medicos.length),
@@ -1013,6 +1063,7 @@ export default function App() {
       cargo: med.cargo || "Médico Hospitalario",
       torre_asignada: med.torre_asignada || "",
       piso_asignado: med.piso_asignado || "",
+      pisos_asignados: pisosAsignadosMedico(med),
     });
 
     setEditId(med.id);
@@ -1277,9 +1328,18 @@ export default function App() {
     const nombre_paciente = String(pacienteForm.nombre_paciente || "").trim();
     const diagnostico = String(pacienteForm.diagnostico || "").trim();
     const pendientes = String(pacienteForm.pendientes || "").trim();
+    const pisosAsignados = pisosAsignadosMedico(medicoActivo);
+    const pisoSeleccionado = parsePisoKey(
+      pacienteForm.piso_key || (pisosAsignados[0] && pisoKey(pisosAsignados[0].torre, pisosAsignados[0].piso))
+    );
 
     if (!cama || !nombre_paciente) {
       showToast("Cama y nombre del paciente son obligatorios", "err");
+      return;
+    }
+
+    if (!pisoSeleccionado.torre || !pisoSeleccionado.piso) {
+      showToast("Selecciona el piso del paciente", "err");
       return;
     }
 
@@ -1289,6 +1349,8 @@ export default function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           medico_id: medicoActivo.id,
+          torre: pisoSeleccionado.torre,
+          piso: pisoSeleccionado.piso,
           cama,
           nombre_paciente,
           diagnostico,
@@ -2506,7 +2568,11 @@ function PacientesCargoMedico({
   crearPacienteCargo,
   eliminarPacienteCargo,
 }) {
+  const pisosAsignados = pisosAsignadosMedico(medicoActivo);
   const piso = pisoMedicoLabel(medicoActivo);
+  const pisoSeleccionado = pacienteForm.piso_key || (
+    pisosAsignados[0] ? pisoKey(pisosAsignados[0].torre, pisosAsignados[0].piso) : ""
+  );
   const pacientesPorPiso = (pacientesTodos || []).reduce((acc, paciente) => {
     const key = `${paciente.torre || "Sin torre"} / ${
       paciente.piso ? String(paciente.piso).toUpperCase() : "Sin piso"
@@ -2523,7 +2589,7 @@ function PacientesCargoMedico({
         <div>
           <h2 style={S.sectionTitle}>Pacientes a cargo</h2>
           <p style={S.sectionSub}>
-            Lista independiente para {piso}. Cada medico gestiona su propia lista.
+            Lista independiente para tus pisos asignados. Cada medico gestiona su propia lista.
           </p>
         </div>
       </div>
@@ -2532,6 +2598,21 @@ function PacientesCargoMedico({
         <div style={S.secTitle}>Agregar paciente</div>
 
         <div className="tm-grid4" style={S.grid4}>
+          <Campo label="Piso del paciente">
+            <select
+              value={pisoSeleccionado}
+              onChange={(e) => setPacienteForm((p) => ({ ...p, piso_key: e.target.value }))}
+              style={inputStyle(false)}
+            >
+              {pisosAsignados.length === 0 && <option value="">Sin pisos asignados</option>}
+              {pisosAsignados.map((item) => (
+                <option key={pisoKey(item.torre, item.piso)} value={pisoKey(item.torre, item.piso)}>
+                  {item.torre} / {String(item.piso).toUpperCase()}
+                </option>
+              ))}
+            </select>
+          </Campo>
+
           <Campo label="Cama">
             <input
               value={pacienteForm.cama}
@@ -2607,6 +2688,10 @@ function PacientesCargoMedico({
                 <div>
                   <div style={S.patientBed}>Cama {paciente.cama}</div>
                   <div style={S.patientName}>{paciente.nombre_paciente}</div>
+                  <div style={S.metaText}>
+                    {paciente.torre || "Sin torre"} /{" "}
+                    {paciente.piso ? String(paciente.piso).toUpperCase() : "Sin piso"}
+                  </div>
                 </div>
 
                 <button
@@ -3225,44 +3310,55 @@ function RegistroMedicos({
             </Campo>
           </div>
 
-          <div className="tm-fg2" style={S.fg2}>
-            <Campo label="Torre a cargo *" err={errores.torre_asignada}>
-              <select
-                style={inputStyle(!!errores.torre_asignada)}
-                value={form.torre_asignada}
-                onChange={(e) =>
-                  setForm((p) => ({
-                    ...p,
-                    torre_asignada: e.target.value,
-                    piso_asignado: "",
-                  }))
-                }
-              >
-                <option value="">-- Seleccione --</option>
-                {Object.keys(TORRES_PISOS).map((torre) => (
-                  <option key={torre} value={torre}>
-                    {torre}
-                  </option>
-                ))}
-              </select>
-            </Campo>
+          <Campo label="Pisos a cargo *" err={errores.pisos_asignados}>
+            <div style={S.floorCheckGrid}>
+              {Object.entries(TORRES_PISOS).map(([torre, pisos]) => (
+                <div key={torre} style={S.floorCheckGroup}>
+                  <div style={S.floorCheckTitle}>{torre}</div>
 
-            <Campo label="Piso a cargo *" err={errores.piso_asignado}>
-              <select
-                style={inputStyle(!!errores.piso_asignado)}
-                value={form.piso_asignado}
-                onChange={(e) => setForm((p) => ({ ...p, piso_asignado: e.target.value }))}
-                disabled={!form.torre_asignada}
-              >
-                <option value="">-- Seleccione --</option>
-                {(TORRES_PISOS[form.torre_asignada] || []).map((piso) => (
-                  <option key={piso} value={piso}>
-                    {piso.toUpperCase()}
-                  </option>
-                ))}
-              </select>
-            </Campo>
-          </div>
+                  <div style={S.floorCheckItems}>
+                    {pisos.map((piso) => {
+                      const checked = pisoAsignadoExiste(form.pisos_asignados, torre, piso);
+
+                      return (
+                        <label
+                          key={pisoKey(torre, piso)}
+                          style={{
+                            ...S.floorCheckItem,
+                            borderColor: checked ? "#2563eb" : "#253350",
+                            background: checked ? "#1d4ed822" : "#0f172a",
+                          }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() =>
+                              setForm((prev) => {
+                                const pisosAsignados = togglePisoAsignado(
+                                  prev.pisos_asignados,
+                                  torre,
+                                  piso
+                                );
+                                const principal = pisosAsignados[0] || {};
+
+                                return {
+                                  ...prev,
+                                  pisos_asignados: pisosAsignados,
+                                  torre_asignada: principal.torre || "",
+                                  piso_asignado: principal.piso || "",
+                                };
+                              })
+                            }
+                          />
+                          <span>{piso.toUpperCase()}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </Campo>
 
           <Campo label="Fecha de ingreso *" err={errores.fecha_ingreso}>
             <input
@@ -3338,9 +3434,9 @@ function RegistroMedicos({
 
                 <div style={{ marginTop: 5 }}>
                   <span style={S.tagBlue}>{med.cargo}</span>
-                  {med.torre_asignada && med.piso_asignado && (
+                  {pisosAsignadosMedico(med).length > 0 && (
                     <span style={{ ...S.tagBlue, marginLeft: 6 }}>
-                      {med.torre_asignada} / {String(med.piso_asignado).toUpperCase()}
+                      {pisoMedicoLabel(med)}
                     </span>
                   )}
                 </div>
@@ -4679,6 +4775,45 @@ const S = {
     padding: "6px 10px",
     fontSize: 11,
     fontWeight: 900,
+  },
+
+  floorCheckGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(145px, 1fr))",
+    gap: 10,
+  },
+
+  floorCheckGroup: {
+    background: "#0f172a",
+    border: "1px solid #1e293b",
+    borderRadius: 8,
+    padding: 10,
+  },
+
+  floorCheckTitle: {
+    color: "#bfdbfe",
+    fontSize: 12,
+    fontWeight: 900,
+    marginBottom: 8,
+  },
+
+  floorCheckItems: {
+    display: "flex",
+    flexWrap: "wrap",
+    gap: 6,
+  },
+
+  floorCheckItem: {
+    display: "flex",
+    alignItems: "center",
+    gap: 6,
+    border: "1px solid #253350",
+    borderRadius: 8,
+    padding: "7px 9px",
+    color: "#e5e7eb",
+    fontSize: 12,
+    fontWeight: 900,
+    cursor: "pointer",
   },
 
   medicoCalendarWrap: {

@@ -192,6 +192,24 @@ async function ensurePacientesCargoSchema() {
   await ensureColumn("pacientes_cargo", "updated_at", "TEXT");
 }
 
+async function ensureMedicoPisosSchema() {
+  await run(`
+    CREATE TABLE IF NOT EXISTS medico_pisos (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      medico_id INTEGER NOT NULL,
+      torre TEXT NOT NULL,
+      piso TEXT NOT NULL,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(medico_id, torre, piso)
+    )
+  `);
+
+  await ensureColumn("medico_pisos", "medico_id", "INTEGER");
+  await ensureColumn("medico_pisos", "torre", "TEXT");
+  await ensureColumn("medico_pisos", "piso", "TEXT");
+  await ensureColumn("medico_pisos", "created_at", "TEXT DEFAULT CURRENT_TIMESTAMP");
+}
+
 function ok(res, data) {
   return res.json(data);
 }
@@ -563,6 +581,92 @@ function validarTorrePiso(torre, piso) {
   return TORRES_PISOS[torre].includes(piso);
 }
 
+function normalizarPisosAsignados(body = {}) {
+  const entrada = Array.isArray(body.pisos_asignados) ? body.pisos_asignados : [];
+  const pisos = entrada
+    .map((item) => ({
+      torre: cleanText(item?.torre || item?.torre_asignada),
+      piso: cleanText(item?.piso || item?.piso_asignado).toLowerCase(),
+    }))
+    .filter((item) => item.torre && item.piso);
+
+  const torreSimple = cleanText(body.torre_asignada || body.torre || body.torre_encargada);
+  const pisoSimple = cleanText(body.piso_asignado || body.piso || body.piso_encargado).toLowerCase();
+
+  if (!pisos.length && torreSimple && pisoSimple) {
+    pisos.push({ torre: torreSimple, piso: pisoSimple });
+  }
+
+  const vistos = new Set();
+  return pisos.filter((item) => {
+    const key = `${item.torre}|${item.piso}`;
+    if (vistos.has(key)) return false;
+    vistos.add(key);
+    return true;
+  });
+}
+
+async function getMedicoPisos(medicoId) {
+  await ensureMedicoPisosSchema();
+
+  const rows = await all(
+    `
+    SELECT torre, piso
+    FROM medico_pisos
+    WHERE medico_id = ?
+    ORDER BY torre COLLATE NOCASE ASC, piso COLLATE NOCASE ASC
+    `,
+    [medicoId]
+  );
+
+  return rows.map((row) => ({ torre: row.torre, piso: row.piso }));
+}
+
+async function replaceMedicoPisos(medicoId, pisos) {
+  await ensureMedicoPisosSchema();
+  await run("DELETE FROM medico_pisos WHERE medico_id = ?", [medicoId]);
+
+  for (const item of pisos) {
+    await run(
+      `
+      INSERT OR IGNORE INTO medico_pisos (medico_id, torre, piso)
+      VALUES (?, ?, ?)
+      `,
+      [medicoId, item.torre, item.piso]
+    );
+  }
+}
+
+async function attachPisosAsignados(medico) {
+  if (!medico) return medico;
+
+  const pisos = await getMedicoPisos(medico.id);
+  const fallback =
+    !pisos.length && medico.torre_asignada && medico.piso_asignado
+      ? [{ torre: medico.torre_asignada, piso: medico.piso_asignado }]
+      : pisos;
+
+  return {
+    ...medico,
+    pisos_asignados: fallback,
+  };
+}
+
+async function attachPisosAsignadosList(medicos) {
+  return Promise.all((medicos || []).map((medico) => attachPisosAsignados(medico)));
+}
+
+async function pisosAsignadosPermitidos(medico) {
+  const pisos = await getMedicoPisos(medico.id);
+
+  if (pisos.length) return pisos;
+  if (medico.torre_asignada && medico.piso_asignado) {
+    return [{ torre: medico.torre_asignada, piso: medico.piso_asignado }];
+  }
+
+  return [];
+}
+
 async function buscarMedicoPorDocumento(documento) {
   const doc = cleanText(documento);
 
@@ -777,6 +881,7 @@ async function initDB() {
 
   await ensureSolicitudesSchema();
   await ensurePacientesCargoSchema();
+  await ensureMedicoPisosSchema();
 
   await ensureIndex(
     "idx_medicos_documento",
@@ -801,6 +906,11 @@ async function initDB() {
   await ensureIndex(
     "idx_turnos_medico_fecha",
     "ON turnos(medico_id, fecha)"
+  );
+
+  await ensureIndex(
+    "idx_medico_pisos_medico",
+    "ON medico_pisos(medico_id)"
   );
 
   await ensureIndex(
@@ -901,7 +1011,7 @@ app.post("/login", async (req, res) => {
       );
     }
 
-    return ok(res, buildAuthResponse(usuario, medico));
+    return ok(res, buildAuthResponse(usuario, await attachPisosAsignados(medico)));
   } catch (error) {
     return fail(res, error);
   }
@@ -951,7 +1061,7 @@ app.post("/login-admin", async (req, res) => {
 
     return ok(
       res,
-      buildAuthResponse(usuario, medico, {
+      buildAuthResponse(usuario, await attachPisosAsignados(medico), {
         rol: "coordinador",
         medico_id: usuario.medico_id || medico?.id || null,
         es_admin: true,
@@ -981,7 +1091,7 @@ app.get("/medicos", async (req, res) => {
       `
     );
 
-    return ok(res, rows);
+    return ok(res, await attachPisosAsignadosList(rows));
   } catch (error) {
     return fail(res, error);
   }
@@ -1009,7 +1119,7 @@ app.get("/medicos/:id", async (req, res) => {
       return fail(res, new Error("MÃ©dico no encontrado"), 404);
     }
 
-    return ok(res, medico);
+    return ok(res, await attachPisosAsignados(medico));
   } catch (error) {
     return fail(res, error);
   }
@@ -1018,17 +1128,19 @@ app.get("/medicos/:id", async (req, res) => {
 app.post("/medicos", requireAdmin, async (req, res) => {
   try {
     const payload = medicoPayloadFromBody(req.body);
+    const pisosAsignados = normalizarPisosAsignados(req.body);
+    const pisoPrincipal = pisosAsignados[0] || {};
 
     if (!payload.nombre || !payload.apellido || !payload.documento) {
       return fail(res, new Error("Nombre, apellido y documento son obligatorios"), 400);
     }
 
-    if (!payload.torre_asignada || !payload.piso_asignado) {
-      return fail(res, new Error("La torre y el piso asignado son obligatorios"), 400);
+    if (!pisosAsignados.length) {
+      return fail(res, new Error("Asigna al menos un piso al médico"), 400);
     }
 
-    if (!validarTorrePiso(payload.torre_asignada, payload.piso_asignado)) {
-      return fail(res, new Error("La torre y el piso asignado no son vÃ¡lidos"), 400);
+    if (!pisosAsignados.every((item) => validarTorrePiso(item.torre, item.piso))) {
+      return fail(res, new Error("Uno o más pisos asignados no son válidos"), 400);
     }
 
     const result = await run(
@@ -1063,14 +1175,15 @@ app.post("/medicos", requireAdmin, async (req, res) => {
         payload.fecha_ingreso,
         payload.cargo,
         payload.color,
-        payload.torre_asignada,
-        payload.piso_asignado,
+        pisoPrincipal.torre,
+        pisoPrincipal.piso,
       ]
     );
 
     const medico = await get("SELECT * FROM medicos WHERE id = ?", [result.id]);
+    await replaceMedicoPisos(result.id, pisosAsignados);
 
-    return ok(res, medico);
+    return ok(res, await attachPisosAsignados(medico));
   } catch (error) {
     if (String(error.message || "").includes("UNIQUE")) {
       return fail(res, new Error("Ya existe un mÃ©dico con ese documento"), 400);
@@ -1089,17 +1202,19 @@ app.put("/medicos/:id", requireAdmin, async (req, res) => {
     }
 
     const payload = medicoPayloadFromBody(req.body);
+    const pisosAsignados = normalizarPisosAsignados(req.body);
+    const pisoPrincipal = pisosAsignados[0] || {};
 
     if (!payload.nombre || !payload.apellido || !payload.documento) {
       return fail(res, new Error("Nombre, apellido y documento son obligatorios"), 400);
     }
 
-    if (!payload.torre_asignada || !payload.piso_asignado) {
-      return fail(res, new Error("La torre y el piso asignado son obligatorios"), 400);
+    if (!pisosAsignados.length) {
+      return fail(res, new Error("Asigna al menos un piso al médico"), 400);
     }
 
-    if (!validarTorrePiso(payload.torre_asignada, payload.piso_asignado)) {
-      return fail(res, new Error("La torre y el piso asignado no son vÃ¡lidos"), 400);
+    if (!pisosAsignados.every((item) => validarTorrePiso(item.torre, item.piso))) {
+      return fail(res, new Error("Uno o más pisos asignados no son válidos"), 400);
     }
 
     await run(
@@ -1132,15 +1247,16 @@ app.put("/medicos/:id", requireAdmin, async (req, res) => {
         payload.fecha_ingreso,
         payload.cargo,
         payload.color,
-        payload.torre_asignada,
-        payload.piso_asignado,
+        pisoPrincipal.torre,
+        pisoPrincipal.piso,
         id,
       ]
     );
 
     const medico = await get("SELECT * FROM medicos WHERE id = ?", [id]);
+    await replaceMedicoPisos(id, pisosAsignados);
 
-    return ok(res, medico);
+    return ok(res, await attachPisosAsignados(medico));
   } catch (error) {
     if (String(error.message || "").includes("UNIQUE")) {
       return fail(res, new Error("Ya existe un mÃ©dico con ese documento"), 400);
@@ -1163,6 +1279,7 @@ app.delete("/medicos/:id", requireAdmin, async (req, res) => {
     try {
       await run("DELETE FROM turnos WHERE medico_id = ?", [id]);
       await run("DELETE FROM horas_adicionales WHERE medico_id = ?", [id]);
+      await run("DELETE FROM medico_pisos WHERE medico_id = ?", [id]);
 
       await run(
         `
@@ -1890,6 +2007,8 @@ app.post("/pacientes-cargo", requireAuth, async (req, res) => {
     const nombre_paciente = cleanText(req.body.nombre_paciente || req.body.nombre);
     const diagnostico = cleanText(req.body.diagnostico);
     const pendientes = cleanText(req.body.pendientes);
+    const torreSolicitada = cleanText(req.body.torre);
+    const pisoSolicitado = cleanText(req.body.piso).toLowerCase();
 
     if (!medico_id || !cama || !nombre_paciente) {
       return fail(res, new Error("MÃ©dico, cama y paciente son obligatorios"), 400);
@@ -1908,6 +2027,23 @@ app.post("/pacientes-cargo", requireAuth, async (req, res) => {
       return fail(res, new Error("MÃ©dico no encontrado"), 404);
     }
 
+    const pisosPermitidos = await pisosAsignadosPermitidos(medico);
+    const pisoPaciente = torreSolicitada && pisoSolicitado
+      ? { torre: torreSolicitada, piso: pisoSolicitado }
+      : pisosPermitidos[0];
+
+    if (!pisoPaciente?.torre || !pisoPaciente?.piso) {
+      return fail(res, new Error("El médico no tiene pisos asignados"), 400);
+    }
+
+    const pisoAutorizado = pisosPermitidos.some(
+      (item) => item.torre === pisoPaciente.torre && item.piso === pisoPaciente.piso
+    );
+
+    if (!pisoAutorizado) {
+      return fail(res, new Error("Ese piso no está asignado al médico"), 403);
+    }
+
     const result = await run(
       `
       INSERT INTO pacientes_cargo (
@@ -1924,8 +2060,8 @@ app.post("/pacientes-cargo", requireAuth, async (req, res) => {
       `,
       [
         medico_id,
-        medico.torre_asignada || "",
-        medico.piso_asignado || "",
+        pisoPaciente.torre,
+        pisoPaciente.piso,
         cama,
         nombre_paciente,
         diagnostico,
