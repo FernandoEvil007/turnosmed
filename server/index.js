@@ -288,6 +288,44 @@ async function insertUsuario({ username, password, rol, medico_id, cedula, nombr
   );
 }
 
+async function upsertConfig(clave, valor) {
+  const hasUpdatedAt = await hasColumn("configuracion", "updated_at");
+  const existente = await get("SELECT clave FROM configuracion WHERE clave = ?", [clave]);
+
+  if (existente) {
+    if (hasUpdatedAt) {
+      await run(
+        `
+        UPDATE configuracion
+        SET valor = ?,
+            updated_at = ?
+        WHERE clave = ?
+        `,
+        [String(valor), fechaActualSql(), clave]
+      );
+    } else {
+      await run(
+        `
+        UPDATE configuracion
+        SET valor = ?
+        WHERE clave = ?
+        `,
+        [String(valor), clave]
+      );
+    }
+  } else if (hasUpdatedAt) {
+    await run(
+      "INSERT INTO configuracion (clave, valor, updated_at) VALUES (?, ?, ?)",
+      [clave, String(valor), fechaActualSql()]
+    );
+  } else {
+    await run("INSERT INTO configuracion (clave, valor) VALUES (?, ?)", [
+      clave,
+      String(valor),
+    ]);
+  }
+}
+
 function buildAuthResponse(usuario, medico = null, overrides = {}) {
   const safeUser = {
     ...publicUser(usuario),
@@ -606,6 +644,8 @@ async function initDB() {
 
   await ensureColumn("turnos", "created_at", "TEXT DEFAULT CURRENT_TIMESTAMP");
 
+  await ensureColumn("configuracion", "updated_at", "TEXT DEFAULT CURRENT_TIMESTAMP");
+
   await ensureColumn("horas_adicionales", "motivo", "TEXT");
   await ensureColumn("horas_adicionales", "created_at", "TEXT DEFAULT CURRENT_TIMESTAMP");
   await ensureColumn("horas_adicionales", "updated_at", "TEXT");
@@ -685,10 +725,7 @@ async function initDB() {
   );
 
   if (!configTarifa) {
-    await run(
-      "INSERT INTO configuracion (clave, valor, updated_at) VALUES (?, ?, ?)",
-      ["tarifa_hora", "119800", fechaActualSql()]
-    );
+    await upsertConfig("tarifa_hora", "119800");
   }
 
   console.log("Tablas verificadas correctamente");
@@ -1680,10 +1717,7 @@ app.get("/configuracion/tarifa-hora", async (req, res) => {
     );
 
     if (!row) {
-      await run(
-        "INSERT INTO configuracion (clave, valor, updated_at) VALUES (?, ?, ?)",
-        ["tarifa_hora", "119800", fechaActualSql()]
-      );
+      await upsertConfig("tarifa_hora", "119800");
 
       row = {
         clave: "tarifa_hora",
@@ -1707,38 +1741,7 @@ app.put("/configuracion/tarifa-hora", requireAdmin, async (req, res) => {
       return fail(res, new Error("Tarifa por hora invÃ¡lida"), 400);
     }
 
-    const existente = await get(
-      `
-      SELECT *
-      FROM configuracion
-      WHERE clave = ?
-      `,
-      ["tarifa_hora"]
-    );
-
-    if (existente) {
-      await run(
-        `
-        UPDATE configuracion
-        SET valor = ?,
-            updated_at = ?
-        WHERE clave = ?
-        `,
-        [String(tarifaHora), fechaActualSql(), "tarifa_hora"]
-      );
-    } else {
-      await run(
-        `
-        INSERT INTO configuracion (
-          clave,
-          valor,
-          updated_at
-        )
-        VALUES (?, ?, ?)
-        `,
-        ["tarifa_hora", String(tarifaHora), fechaActualSql()]
-      );
-    }
+    await upsertConfig("tarifa_hora", tarifaHora);
 
     return ok(res, {
       tarifaHora,
