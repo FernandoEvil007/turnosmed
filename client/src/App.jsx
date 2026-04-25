@@ -410,10 +410,28 @@ async function api(path, options = {}) {
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
   };
 
-  const res = await fetch(`${API_URL}${path}`, {
-    ...options,
-    headers,
-  });
+  let res = null;
+
+  try {
+    res = await fetch(`${API_URL}${path}`, {
+      ...options,
+      headers,
+    });
+  } catch (error) {
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+
+    try {
+      res = await fetch(`${API_URL}${path}`, {
+        ...options,
+        headers,
+      });
+    } catch {
+      throw new Error(
+        "No se pudo conectar con el servidor. Actualiza la pagina e intenta nuevamente."
+      );
+    }
+  }
+
   let data = null;
 
   try {
