@@ -283,6 +283,27 @@ function turnosDiaOrdenados(tipos = []) {
     .sort((a, b) => (orden[a] || 99) - (orden[b] || 99));
 }
 
+function horaSalidaTurnos(tipos = []) {
+  const salidaPorTurno = {
+    DIA: "17:00",
+    CENIZO: "21:00",
+    FDS: "14:00",
+  };
+  const ordenados = turnosDiaOrdenados(tipos);
+  const ultimoTurno = ordenados[ordenados.length - 1];
+
+  return salidaPorTurno[ultimoTurno] || "Sin turno";
+}
+
+function pisoMedicoLabel(medico) {
+  const torre = medico?.torre_asignada || "Sin torre";
+  const piso = medico?.piso_asignado
+    ? String(medico.piso_asignado).toUpperCase()
+    : "Sin piso";
+
+  return `${torre} / ${piso}`;
+}
+
 function puedeAgregarTurno(tiposActuales = [], tipoNuevo, fecha = "") {
   const tipos = turnosDiaOrdenados(tiposActuales);
 
@@ -1918,6 +1939,7 @@ export default function App() {
           <VistaHoy
             medicos={medicos}
             fecha={HOY_ISO}
+            tarifaHora={tarifaHora}
             getTurnosDia={getTurnosDia}
             getHorasExtraDia={getHorasExtraDia}
             horasDiaTotal={horasDiaTotal}
@@ -2954,7 +2976,7 @@ function RegistroMedicos({
   );
 }
 
-function VistaHoy({ medicos, fecha, getTurnosDia, getHorasExtraDia, horasDiaTotal }) {
+function VistaHoy({ medicos, fecha, tarifaHora, getTurnosDia, getHorasExtraDia, horasDiaTotal }) {
   return (
     <section>
       <PageHeader title="Hoy" sub={`Resumen de turnos para ${fecha}`} />
@@ -2964,6 +2986,7 @@ function VistaHoy({ medicos, fecha, getTurnosDia, getHorasExtraDia, horasDiaTota
           const tipos = turnosDiaOrdenados(getTurnosDia(med.id, fecha));
           const extra = getHorasExtraDia(med.id, fecha);
           const total = horasDiaTotal(med.id, fecha);
+          const valorFacturado = total * Number(tarifaHora || 0);
 
           return (
             <div key={med.id} className="tm-card" style={S.card}>
@@ -2993,7 +3016,12 @@ function VistaHoy({ medicos, fecha, getTurnosDia, getHorasExtraDia, horasDiaTota
                 {extra > 0 && <span style={S.extraChip}>➕ {extra}h extra</span>}
               </div>
 
-              <div style={S.totalLine}>Total: {total}h</div>
+              <div style={S.infoRows}>
+                <span>Piso asignado: {pisoMedicoLabel(med)}</span>
+                <span>Hora de salida: {horaSalidaTurnos(tipos)}</span>
+                <span>Horas facturadas hoy: {total}h</span>
+                <span>Valor facturado hoy: {formatCOP(valorFacturado)}</span>
+              </div>
             </div>
           );
         })}

@@ -1787,14 +1787,24 @@ app.put("/configuracion/tarifa-hora", requireAdmin, async (req, res) => {
 /* ============================================================================
    SOLICITUDES CAMBIO DE TURNO
 ============================================================================ */
-app.get("/solicitudes-cambio-turno", async (req, res) => {
+app.get("/solicitudes-cambio-turno", requireAuth, async (req, res) => {
   try {
+    const medicoId = Number(req.auth?.medico_id);
+    const filtroMedico = isAdminRol(req.auth?.rol)
+      ? { where: "", params: [] }
+      : {
+          where: "WHERE medico_solicitante_id = ? OR medico_destino_id = ?",
+          params: [medicoId, medicoId],
+        };
+
     const rows = await all(
       `
       SELECT *
       FROM solicitudes_cambio_turno
+      ${filtroMedico.where}
       ORDER BY datetime(fecha_solicitud) DESC, id DESC
-      `
+      `,
+      filtroMedico.params
     );
 
     return ok(res, rows);
@@ -2052,14 +2062,24 @@ app.put("/solicitudes-cambio-turno/:id/rechazar", requireAdmin, async (req, res)
 /* ============================================================================
    SOLICITUDES CESION DE TURNO
 ============================================================================ */
-app.get("/solicitudes-cesion-turno", async (req, res) => {
+app.get("/solicitudes-cesion-turno", requireAuth, async (req, res) => {
   try {
+    const medicoId = Number(req.auth?.medico_id);
+    const filtroMedico = isAdminRol(req.auth?.rol)
+      ? { where: "", params: [] }
+      : {
+          where: "WHERE medico_solicitante_id = ? OR medico_receptor_id = ?",
+          params: [medicoId, medicoId],
+        };
+
     const rows = await all(
       `
       SELECT *
       FROM solicitudes_cesion_turno
+      ${filtroMedico.where}
       ORDER BY datetime(fecha_solicitud) DESC, id DESC
-      `
+      `,
+      filtroMedico.params
     );
 
     return ok(res, rows);
@@ -2267,14 +2287,21 @@ app.put("/solicitudes-cesion-turno/:id/rechazar", requireAdmin, async (req, res)
 /* ============================================================================
    SOLICITUDES HORARIO
 ============================================================================ */
-app.get("/solicitudes-horario", async (req, res) => {
+app.get("/solicitudes-horario", requireAuth, async (req, res) => {
   try {
+    const medicoId = Number(req.auth?.medico_id);
+    const filtroMedico = isAdminRol(req.auth?.rol)
+      ? { where: "", params: [] }
+      : { where: "WHERE medico_id = ?", params: [medicoId] };
+
     const rows = await all(
       `
       SELECT *
       FROM solicitudes_horario
+      ${filtroMedico.where}
       ORDER BY datetime(fecha_solicitud) DESC, id DESC
-      `
+      `,
+      filtroMedico.params
     );
 
     return ok(res, rows);
