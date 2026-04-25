@@ -122,6 +122,7 @@ const USER_FORM0 = {
 };
 
 const ADMIN_FORM0 = {
+  medico_id: "",
   nombre: "",
   cedula: "",
   username: "",
@@ -648,6 +649,25 @@ export default function App() {
     );
   }
 
+  function usuarioDisponible(base, suffix = "admin") {
+    const limpio = String(base || "").trim();
+    if (!limpio) return "";
+
+    if (!usuarios.some((u) => String(u.username) === limpio)) {
+      return limpio;
+    }
+
+    let i = 1;
+    let candidato = `${limpio}-${suffix}`;
+
+    while (usuarios.some((u) => String(u.username) === candidato)) {
+      i += 1;
+      candidato = `${limpio}-${suffix}-${i}`;
+    }
+
+    return candidato;
+  }
+
   function getMedicoNombre(id) {
     const med = medicos.find((m) => Number(m.id) === Number(id));
 
@@ -934,7 +954,7 @@ export default function App() {
 
   async function crearUsuarioMedico() {
     const medico_id = Number(userForm.medico_id);
-    const username = String(userForm.username || "").trim();
+    const username = usuarioDisponible(String(userForm.username || "").trim(), "medico");
     const password = String(userForm.password || "").trim();
 
     if (!medico_id || !username || !password) {
@@ -964,13 +984,19 @@ export default function App() {
   }
 
   async function crearAdministrador() {
-    const nombre = String(adminForm.nombre || "").trim();
-    const cedula = String(adminForm.cedula || "").trim();
-    const username = String(adminForm.username || "").trim() || cedula;
+    const medico_id = Number(adminForm.medico_id);
+    const medico = medicos.find((m) => Number(m.id) === medico_id);
+    const nombre = medico
+      ? `${medico.nombre || ""} ${medico.apellido || ""}`.trim()
+      : String(adminForm.nombre || "").trim();
+    const cedula = medico
+      ? String(medico.documento || "").trim()
+      : String(adminForm.cedula || "").trim();
+    const username = usuarioDisponible(String(adminForm.username || "").trim() || cedula);
     const password = String(adminForm.password || "").trim();
 
-    if (!nombre || !cedula || !password) {
-      showToast("Completa nombre, cédula y contraseña del nuevo administrador", "err");
+    if (!medico_id || !medico || !password) {
+      showToast("Selecciona un medico registrado y asigna una contrasena", "err");
       return;
     }
 
@@ -987,7 +1013,7 @@ export default function App() {
           username,
           password,
           rol: "coordinador",
-          medico_id: null,
+          medico_id,
           cedula,
           nombre,
         }),
@@ -1923,6 +1949,7 @@ export default function App() {
             resetearPasswordUsuario={resetearPasswordUsuario}
             eliminarAdministrador={eliminarAdministrador}
             getUsuarioMedico={getUsuarioMedico}
+            usuarioDisponible={usuarioDisponible}
             horasMes={horasMes}
             salarioMes={salarioMes}
             year={year}
@@ -3143,6 +3170,7 @@ function VistaMedicos({
   resetearPasswordUsuario,
   eliminarAdministrador,
   getUsuarioMedico,
+  usuarioDisponible,
   horasMes,
   salarioMes,
   year,
@@ -3155,6 +3183,13 @@ function VistaMedicos({
   const administradores = usuarios.filter(
     (u) => u.rol === "coordinador" || u.rol === "administrador"
   );
+  const medicoTieneAdmin = (medico) =>
+    administradores.some(
+      (u) =>
+        Number(u.medico_id) === Number(medico.id) ||
+        String(u.cedula || "") === String(medico.documento || "")
+    );
+  const medicosSinAdmin = medicos.filter((m) => !medicoTieneAdmin(m));
 
   return (
     <section>
@@ -3172,28 +3207,30 @@ function VistaMedicos({
         <div style={S.secTitle}>Crear otro administrador</div>
 
         <div className="tm-grid4" style={S.grid4}>
-          <Campo label="Nombre administrador">
-            <input
-              value={adminForm.nombre}
-              onChange={(e) => setAdminForm((p) => ({ ...p, nombre: e.target.value }))}
-              style={inputStyle(false)}
-              placeholder="Nombre"
-            />
-          </Campo>
+          <Campo label="Medico registrado">
+            <select
+              value={adminForm.medico_id}
+              onChange={(e) => {
+                const medico_id = e.target.value;
+                const medico = medicos.find((m) => Number(m.id) === Number(medico_id));
 
-          <Campo label="Cédula">
-            <input
-              value={adminForm.cedula}
-              onChange={(e) =>
                 setAdminForm((p) => ({
                   ...p,
-                  cedula: e.target.value,
-                  username: e.target.value,
-                }))
-              }
+                  medico_id,
+                  nombre: medico ? `${medico.nombre || ""} ${medico.apellido || ""}`.trim() : "",
+                  cedula: medico ? String(medico.documento || "") : "",
+                  username: medico ? usuarioDisponible(medico.documento || "", "admin") : "",
+                }));
+              }}
               style={inputStyle(false)}
-              placeholder="Cédula"
-            />
+            >
+              <option value="">-- Seleccione --</option>
+              {medicosSinAdmin.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.nombre} {m.apellido} - {m.documento}
+                </option>
+              ))}
+            </select>
           </Campo>
 
           <Campo label="Usuario">
@@ -3242,7 +3279,12 @@ function VistaMedicos({
                 <button
                   type="button"
                   onClick={() => eliminarAdministrador(u.id)}
-                  style={S.adminDeleteBtn}
+                  disabled={administradores.length <= 1}
+                  style={{
+                    ...S.adminDeleteBtn,
+                    opacity: administradores.length <= 1 ? 0.45 : 1,
+                    cursor: administradores.length <= 1 ? "not-allowed" : "pointer",
+                  }}
                 >
                   Eliminar
                 </button>
@@ -3266,7 +3308,7 @@ function VistaMedicos({
               setUserForm((p) => ({
                 ...p,
                 medico_id,
-                username: medico ? String(medico.documento || "") : "",
+                username: medico ? usuarioDisponible(medico.documento || "", "medico") : "",
               }));
             }}
             options={[

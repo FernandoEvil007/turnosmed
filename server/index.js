@@ -358,6 +358,41 @@ async function buscarMedicoPorDocumento(documento) {
   );
 }
 
+async function contarAdministradoresActivos() {
+  const row = await get(
+    `
+    SELECT COUNT(*) AS total
+    FROM usuarios
+    WHERE activo = 1
+      AND (rol = 'coordinador' OR rol = 'administrador' OR rol = 'admin')
+    `
+  );
+
+  return Number(row?.total || 0);
+}
+
+async function buscarAdminActivoPorMedicoOCedula(medicoId, cedula) {
+  const doc = toNull(cedula);
+  const id = medicoId ? Number(medicoId) : null;
+
+  if (!id && !doc) return null;
+
+  return get(
+    `
+    SELECT *
+    FROM usuarios
+    WHERE activo = 1
+      AND (rol = 'coordinador' OR rol = 'administrador' OR rol = 'admin')
+      AND (
+        (? IS NOT NULL AND medico_id = ?)
+        OR (? IS NOT NULL AND cedula = ?)
+      )
+    LIMIT 1
+    `,
+    [id, id, doc, doc]
+  );
+}
+
 /* ============================================================================
    INIT DB
 ============================================================================ */
@@ -1032,7 +1067,7 @@ app.post("/usuarios", requireAdmin, async (req, res) => {
     const username = cleanText(req.body.username);
     const password = cleanText(req.body.password);
     const rol = normalizeRol(req.body.rol);
-    const medico_id = req.body.medico_id ? Number(req.body.medico_id) : null;
+    let medico_id = req.body.medico_id ? Number(req.body.medico_id) : null;
     const cedula = toNull(req.body.cedula);
     const nombre = toNull(req.body.nombre);
 
@@ -1042,6 +1077,15 @@ app.post("/usuarios", requireAdmin, async (req, res) => {
 
     if (rol === "medico" && !medico_id) {
       return fail(res, new Error("El usuario mÃ©dico debe estar vinculado a un mÃ©dico"), 400);
+    }
+
+    if (rol === "coordinador" && !medico_id && cedula) {
+      const medicoConMismaCedula = await buscarMedicoPorDocumento(cedula);
+      medico_id = medicoConMismaCedula?.id || null;
+    }
+
+    if (rol === "coordinador" && !medico_id) {
+      return fail(res, new Error("El administrador debe estar vinculado a un mÃ©dico registrado"), 400);
     }
 
     if (medico_id) {
@@ -1057,6 +1101,14 @@ app.post("/usuarios", requireAdmin, async (req, res) => {
 
       if (!medico) {
         return fail(res, new Error("El mÃ©dico vinculado no existe"), 400);
+      }
+    }
+
+    if (rol === "coordinador") {
+      const adminExistente = await buscarAdminActivoPorMedicoOCedula(medico_id, cedula);
+
+      if (adminExistente) {
+        return fail(res, new Error("Ese mÃ©dico ya tiene acceso de administrador"), 400);
       }
     }
 
@@ -1213,6 +1265,20 @@ app.delete("/usuarios/:id", requireAdmin, async (req, res) => {
       return fail(res, new Error("ID invÃ¡lido"), 400);
     }
 
+    const usuario = await get("SELECT * FROM usuarios WHERE id = ? AND activo = 1", [id]);
+
+    if (!usuario) {
+      return fail(res, new Error("Usuario no encontrado"), 404);
+    }
+
+    if (isAdminRol(usuario.rol)) {
+      const totalAdmins = await contarAdministradoresActivos();
+
+      if (totalAdmins <= 1) {
+        return fail(res, new Error("Debe existir al menos un administrador activo"), 400);
+      }
+    }
+
     await run("UPDATE usuarios SET activo = 0 WHERE id = ?", [id]);
 
     return ok(res, {
@@ -1252,6 +1318,12 @@ app.delete("/administradores/:id", requireAdmin, async (req, res) => {
 
     if (!isAdminRol(usuario.rol)) {
       return fail(res, new Error("Este usuario no es administrador"), 400);
+    }
+
+    const totalAdmins = await contarAdministradoresActivos();
+
+    if (totalAdmins <= 1) {
+      return fail(res, new Error("Debe existir al menos un administrador activo"), 400);
     }
 
     await run("UPDATE usuarios SET activo = 0 WHERE id = ?", [id]);
