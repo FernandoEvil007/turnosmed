@@ -24,6 +24,7 @@ const VIEWS_COORD = {
 const VIEWS_MEDICO = {
   HORARIO: "horario",
   SOLICITUDES: "solicitudes",
+  PACIENTES: "pacientes",
 };
 
 const ESTADOS = {
@@ -119,6 +120,13 @@ const MEDICO_EXTRA_FORM0 = {
   fecha: "",
   horas: "",
   motivo: "",
+};
+
+const PACIENTE_FORM0 = {
+  cama: "",
+  nombre_paciente: "",
+  diagnostico: "",
+  pendientes: "",
 };
 
 const USER_FORM0 = {
@@ -485,6 +493,8 @@ export default function App() {
 
   const [extraForm, setExtraForm] = useState(EXTRA_FORM0);
   const [medicoExtraForm, setMedicoExtraForm] = useState(MEDICO_EXTRA_FORM0);
+  const [pacienteForm, setPacienteForm] = useState(PACIENTE_FORM0);
+  const [pacientesCargo, setPacientesCargo] = useState([]);
   const [userForm, setUserForm] = useState(USER_FORM0);
   const [adminForm, setAdminForm] = useState(ADMIN_FORM0);
   const [resetPassForm, setResetPassForm] = useState(RESET_PASS_FORM0);
@@ -544,6 +554,20 @@ export default function App() {
   async function cargarHorasAdicionales() {
     const data = await api("/horas-adicionales");
     setHorasAdicionales(mapearHorasAdicionales(Array.isArray(data) ? data : []));
+  }
+
+  async function cargarPacientesCargo(medicoId = medicoActivo?.id) {
+    if (!medicoId || !localStorage.getItem("authToken")) {
+      setPacientesCargo([]);
+      return;
+    }
+
+    try {
+      const data = await api(`/pacientes-cargo?medico_id=${medicoId}`);
+      setPacientesCargo(Array.isArray(data) ? data : []);
+    } catch {
+      setPacientesCargo([]);
+    }
   }
 
   async function cargarSolicitudesCambio() {
@@ -631,6 +655,12 @@ export default function App() {
       setPantalla(PANTALLAS.SELECTOR);
     }
   }, []);
+
+  useEffect(() => {
+    if (medicoActivo?.id && usuarioSesion) {
+      cargarPacientesCargo(medicoActivo.id);
+    }
+  }, [medicoActivo?.id, usuarioSesion?.id]);
 
   function navMes(dir, setY, setM, y, m) {
     let nm = m + dir;
@@ -733,6 +763,8 @@ export default function App() {
   function logout() {
     setMedicoActivo(null);
     setUsuarioSesion(null);
+    setPacientesCargo([]);
+    setPacienteForm(PACIENTE_FORM0);
     limpiarLogin();
     localStorage.removeItem("authToken");
     localStorage.removeItem("usuarioSesion");
@@ -1228,6 +1260,55 @@ export default function App() {
     }
   }
 
+  async function crearPacienteCargo() {
+    if (!medicoActivo?.id) {
+      showToast("SesiÃ³n mÃ©dica no vÃ¡lida", "err");
+      return;
+    }
+
+    const cama = String(pacienteForm.cama || "").trim();
+    const nombre_paciente = String(pacienteForm.nombre_paciente || "").trim();
+    const diagnostico = String(pacienteForm.diagnostico || "").trim();
+    const pendientes = String(pacienteForm.pendientes || "").trim();
+
+    if (!cama || !nombre_paciente) {
+      showToast("Cama y nombre del paciente son obligatorios", "err");
+      return;
+    }
+
+    try {
+      await api("/pacientes-cargo", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          medico_id: medicoActivo.id,
+          cama,
+          nombre_paciente,
+          diagnostico,
+          pendientes,
+        }),
+      });
+
+      setPacienteForm(PACIENTE_FORM0);
+      await cargarPacientesCargo(medicoActivo.id);
+      showToast("Paciente agregado correctamente");
+    } catch (error) {
+      console.error(error);
+      showToast(error.message || "No se pudo agregar el paciente", "err");
+    }
+  }
+
+  async function eliminarPacienteCargo(id) {
+    try {
+      await api(`/pacientes-cargo/${id}`, { method: "DELETE" });
+      setPacientesCargo((prev) => prev.filter((p) => Number(p.id) !== Number(id)));
+      showToast("Paciente eliminado correctamente");
+    } catch (error) {
+      console.error(error);
+      showToast(error.message || "No se pudo eliminar el paciente", "err");
+    }
+  }
+
   async function agregarTurnoCoord(medicoId, fecha, tipoTurno) {
     try {
       const actuales = getTurnosDia(medicoId, fecha);
@@ -1673,6 +1754,14 @@ export default function App() {
             >
               📬 Solicitudes
             </button>
+
+            <button
+              type="button"
+              onClick={() => setMedicoView(VIEWS_MEDICO.PACIENTES)}
+              style={S.medicoTab(medicoView === VIEWS_MEDICO.PACIENTES)}
+            >
+              Pacientes a cargo
+            </button>
           </div>
 
           {medicoView === VIEWS_MEDICO.HORARIO && (
@@ -1757,6 +1846,17 @@ export default function App() {
               solicitudesCesionTurno={solicitudesCesionTurno}
               solicHorario={solicHorario}
               getMedicoNombre={getMedicoNombre}
+            />
+          )}
+
+          {medicoView === VIEWS_MEDICO.PACIENTES && (
+            <PacientesCargoMedico
+              medicoActivo={medicoActivo}
+              pacienteForm={pacienteForm}
+              setPacienteForm={setPacienteForm}
+              pacientesCargo={pacientesCargo}
+              crearPacienteCargo={crearPacienteCargo}
+              eliminarPacienteCargo={eliminarPacienteCargo}
             />
           )}
         </div>
@@ -2386,6 +2486,133 @@ function HorasExtraMedico({ medicoExtraForm, setMedicoExtraForm, guardarHorasExt
         Enviar horas extra
       </button>
     </div>
+  );
+}
+
+function PacientesCargoMedico({
+  medicoActivo,
+  pacienteForm,
+  setPacienteForm,
+  pacientesCargo,
+  crearPacienteCargo,
+  eliminarPacienteCargo,
+}) {
+  const piso = pisoMedicoLabel(medicoActivo);
+
+  return (
+    <section style={S.solicitudesMedicoSection}>
+      <div style={S.sectionHeader}>
+        <div>
+          <h2 style={S.sectionTitle}>Pacientes a cargo</h2>
+          <p style={S.sectionSub}>
+            Lista independiente para {piso}. Cada medico gestiona su propia lista.
+          </p>
+        </div>
+      </div>
+
+      <div className="tm-card" style={S.card}>
+        <div style={S.secTitle}>Agregar paciente</div>
+
+        <div className="tm-grid4" style={S.grid4}>
+          <Campo label="Cama">
+            <input
+              value={pacienteForm.cama}
+              onChange={(e) => setPacienteForm((p) => ({ ...p, cama: e.target.value }))}
+              style={inputStyle(false)}
+              placeholder="Ej: 701A"
+            />
+          </Campo>
+
+          <Campo label="Nombre del paciente">
+            <input
+              value={pacienteForm.nombre_paciente}
+              onChange={(e) =>
+                setPacienteForm((p) => ({ ...p, nombre_paciente: e.target.value }))
+              }
+              style={inputStyle(false)}
+              placeholder="Nombre completo"
+            />
+          </Campo>
+
+          <Campo label="Diagnostico">
+            <input
+              value={pacienteForm.diagnostico}
+              onChange={(e) =>
+                setPacienteForm((p) => ({ ...p, diagnostico: e.target.value }))
+              }
+              style={inputStyle(false)}
+              placeholder="Diagnostico principal"
+            />
+          </Campo>
+
+          <Campo label="Pendientes">
+            <input
+              value={pacienteForm.pendientes}
+              onChange={(e) =>
+                setPacienteForm((p) => ({ ...p, pendientes: e.target.value }))
+              }
+              style={inputStyle(false)}
+              placeholder="Labs, imagenes, interconsultas..."
+            />
+          </Campo>
+        </div>
+
+        <button
+          type="button"
+          onClick={crearPacienteCargo}
+          style={{ ...S.primaryButton, marginTop: 12 }}
+        >
+          Agregar paciente
+        </button>
+      </div>
+
+      <div className="tm-card" style={S.card}>
+        <div style={S.cardHeaderBetween}>
+          <div>
+            <div style={S.secTitle}>Lista del piso</div>
+            <div style={S.metaText}>{piso}</div>
+          </div>
+
+          <span style={S.badgeBlue}>
+            {pacientesCargo.length} paciente{pacientesCargo.length !== 1 ? "s" : ""}
+          </span>
+        </div>
+
+        {pacientesCargo.length === 0 && (
+          <div style={S.emptyCard}>No hay pacientes registrados en tu lista.</div>
+        )}
+
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 12 }}>
+          {pacientesCargo.map((paciente) => (
+            <div key={paciente.id} style={S.patientCard}>
+              <div style={S.rowBetween}>
+                <div>
+                  <div style={S.patientBed}>Cama {paciente.cama}</div>
+                  <div style={S.patientName}>{paciente.nombre_paciente}</div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => eliminarPacienteCargo(paciente.id)}
+                  style={S.adminDeleteBtn}
+                >
+                  Borrar
+                </button>
+              </div>
+
+              <div style={S.infoRows}>
+                <span>
+                  <b>Diagnostico:</b> {paciente.diagnostico || "Sin diagnostico"}
+                </span>
+                <span>
+                  <b>Pendientes:</b> {paciente.pendientes || "Sin pendientes"}
+                </span>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -4866,6 +5093,26 @@ const S = {
     padding: "6px 9px",
     cursor: "pointer",
     fontSize: 11,
+    fontWeight: 900,
+  },
+
+  patientCard: {
+    background: "#111827",
+    border: "1px solid #1f2937",
+    borderRadius: 12,
+    padding: 14,
+  },
+
+  patientBed: {
+    color: "#60a5fa",
+    fontSize: 12,
+    fontWeight: 900,
+    marginBottom: 4,
+  },
+
+  patientName: {
+    color: "#f1f5f9",
+    fontSize: 15,
     fontWeight: 900,
   },
 

@@ -165,6 +165,33 @@ async function ensureSolicitudesSchema() {
   await ensureColumn("solicitudes_horario", "updated_at", "TEXT");
 }
 
+async function ensurePacientesCargoSchema() {
+  await run(`
+    CREATE TABLE IF NOT EXISTS pacientes_cargo (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      medico_id INTEGER NOT NULL,
+      torre TEXT,
+      piso TEXT,
+      cama TEXT NOT NULL,
+      nombre_paciente TEXT NOT NULL,
+      diagnostico TEXT,
+      pendientes TEXT,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT
+    )
+  `);
+
+  await ensureColumn("pacientes_cargo", "medico_id", "INTEGER");
+  await ensureColumn("pacientes_cargo", "torre", "TEXT");
+  await ensureColumn("pacientes_cargo", "piso", "TEXT");
+  await ensureColumn("pacientes_cargo", "cama", "TEXT");
+  await ensureColumn("pacientes_cargo", "nombre_paciente", "TEXT");
+  await ensureColumn("pacientes_cargo", "diagnostico", "TEXT");
+  await ensureColumn("pacientes_cargo", "pendientes", "TEXT");
+  await ensureColumn("pacientes_cargo", "created_at", "TEXT DEFAULT CURRENT_TIMESTAMP");
+  await ensureColumn("pacientes_cargo", "updated_at", "TEXT");
+}
+
 function ok(res, data) {
   return res.json(data);
 }
@@ -654,6 +681,21 @@ async function initDB() {
   `);
 
   await run(`
+    CREATE TABLE IF NOT EXISTS pacientes_cargo (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      medico_id INTEGER NOT NULL,
+      torre TEXT,
+      piso TEXT,
+      cama TEXT NOT NULL,
+      nombre_paciente TEXT NOT NULL,
+      diagnostico TEXT,
+      pendientes TEXT,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT
+    )
+  `);
+
+  await run(`
     CREATE TABLE IF NOT EXISTS configuracion (
       clave TEXT PRIMARY KEY,
       valor TEXT NOT NULL,
@@ -734,6 +776,7 @@ async function initDB() {
   await ensureColumn("horas_adicionales", "updated_at", "TEXT");
 
   await ensureSolicitudesSchema();
+  await ensurePacientesCargoSchema();
 
   await ensureIndex(
     "idx_medicos_documento",
@@ -773,6 +816,11 @@ async function initDB() {
   await ensureIndex(
     "idx_solicitudes_horario_estado",
     "ON solicitudes_horario(estado)"
+  );
+
+  await ensureIndex(
+    "idx_pacientes_cargo_medico",
+    "ON pacientes_cargo(medico_id)"
   );
 
   const configTarifa = await get(
@@ -1775,6 +1823,129 @@ app.post("/horas-adicionales", requireAuth, async (req, res) => {
     );
 
     return ok(res, row);
+  } catch (error) {
+    return fail(res, error);
+  }
+});
+
+/* ============================================================================
+   PACIENTES A CARGO
+============================================================================ */
+app.get("/pacientes-cargo", requireAuth, async (req, res) => {
+  try {
+    await ensurePacientesCargoSchema();
+
+    const medico_id = Number(req.query.medico_id || req.auth?.medico_id);
+
+    if (!medico_id) {
+      return fail(res, new Error("MÃ©dico requerido"), 400);
+    }
+
+    if (!canManageMedico(req, medico_id)) {
+      return fail(res, new Error("No puedes ver pacientes de otro mÃ©dico"), 403);
+    }
+
+    const rows = await all(
+      `
+      SELECT *
+      FROM pacientes_cargo
+      WHERE medico_id = ?
+      ORDER BY piso COLLATE NOCASE ASC,
+               cama COLLATE NOCASE ASC,
+               datetime(created_at) DESC,
+               id DESC
+      `,
+      [medico_id]
+    );
+
+    return ok(res, rows);
+  } catch (error) {
+    return fail(res, error);
+  }
+});
+
+app.post("/pacientes-cargo", requireAuth, async (req, res) => {
+  try {
+    await ensurePacientesCargoSchema();
+
+    const medico_id = Number(req.body.medico_id || req.auth?.medico_id);
+    const cama = cleanText(req.body.cama);
+    const nombre_paciente = cleanText(req.body.nombre_paciente || req.body.nombre);
+    const diagnostico = cleanText(req.body.diagnostico);
+    const pendientes = cleanText(req.body.pendientes);
+
+    if (!medico_id || !cama || !nombre_paciente) {
+      return fail(res, new Error("MÃ©dico, cama y paciente son obligatorios"), 400);
+    }
+
+    if (!canManageMedico(req, medico_id)) {
+      return fail(res, new Error("No puedes registrar pacientes a nombre de otro mÃ©dico"), 403);
+    }
+
+    const medico = await get(
+      "SELECT id, torre_asignada, piso_asignado FROM medicos WHERE id = ? AND activo = 1",
+      [medico_id]
+    );
+
+    if (!medico) {
+      return fail(res, new Error("MÃ©dico no encontrado"), 404);
+    }
+
+    const result = await run(
+      `
+      INSERT INTO pacientes_cargo (
+        medico_id,
+        torre,
+        piso,
+        cama,
+        nombre_paciente,
+        diagnostico,
+        pendientes,
+        updated_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+      [
+        medico_id,
+        medico.torre_asignada || "",
+        medico.piso_asignado || "",
+        cama,
+        nombre_paciente,
+        diagnostico,
+        pendientes,
+        fechaActualSql(),
+      ]
+    );
+
+    const row = await get("SELECT * FROM pacientes_cargo WHERE id = ?", [result.id]);
+
+    return ok(res, row);
+  } catch (error) {
+    return fail(res, error);
+  }
+});
+
+app.delete("/pacientes-cargo/:id", requireAuth, async (req, res) => {
+  try {
+    await ensurePacientesCargoSchema();
+
+    const id = Number(req.params.id);
+    const paciente = await get("SELECT * FROM pacientes_cargo WHERE id = ?", [id]);
+
+    if (!paciente) {
+      return fail(res, new Error("Paciente no encontrado"), 404);
+    }
+
+    if (!canManageMedico(req, paciente.medico_id)) {
+      return fail(res, new Error("No puedes borrar pacientes de otro mÃ©dico"), 403);
+    }
+
+    await run("DELETE FROM pacientes_cargo WHERE id = ?", [id]);
+
+    return ok(res, {
+      message: "Paciente eliminado correctamente",
+      id,
+    });
   } catch (error) {
     return fail(res, error);
   }
