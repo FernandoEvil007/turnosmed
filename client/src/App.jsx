@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import "./App.css";
 
 /* ============================================================================
    CONFIG
@@ -8,8 +9,6 @@ const API_URL =
 
 const ADMIN_CEDULA_FIJA = "6662672";
 const ADMIN_PASSWORD_FIJA = "6662672";
-
-console.log("API_URL usada por la app:", API_URL);
 
 const PANTALLAS = {
   SELECTOR: "selector",
@@ -544,6 +543,7 @@ export default function App() {
   function entrarComoAdministradorFijo() {
     const usuarioFijo = {
       id: 0,
+      nombre: "Fernando Rodriguez Bayona",
       username: "Fernando Rodriguez Bayona",
       rol: "coordinador",
       medico_id: null,
@@ -559,7 +559,9 @@ export default function App() {
     localStorage.removeItem("medicoActivo");
     localStorage.setItem("pantalla", PANTALLAS.COORD);
 
-    limpiarLogin();
+    setAdminCedula("");
+    setAdminPassword("");
+    setLoginErr("");
     setPantalla(PANTALLAS.COORD);
   }
 
@@ -616,9 +618,7 @@ export default function App() {
       setPantalla(PANTALLAS.COORD);
     } catch (error) {
       console.error(error);
-      setLoginErr(
-        "Administrador no válido. Si es un administrador nuevo, falta actualizar el backend con /login-admin."
-      );
+      setLoginErr(error.message || "Administrador no válido");
     }
   }
 
@@ -1035,19 +1035,17 @@ export default function App() {
 
   if (pantalla === PANTALLAS.SELECTOR) {
     return (
-      <div style={S.pageCenter}>
+      <div className="tm-page-center" style={S.pageCenter}>
+        <CreditBadge />
         <Toast toast={toast} />
 
         <div style={{ textAlign: "center", marginBottom: 34 }}>
           <div style={{ fontSize: 52, marginBottom: 12 }}>🏥</div>
           <div style={S.appTitle}>TurnosMed</div>
           <div style={S.appSub}>Sistema de Coordinación Hospitalaria</div>
-          <div style={S.creatorText}>
-            Creado por Fernando Rodriguez Bayona. Clinica Fundacion Valle de lili
-          </div>
         </div>
 
-        <div style={S.loginCard}>
+        <div className="tm-login-card" style={S.loginCard}>
           <div style={S.loginTabs}>
             <button
               type="button"
@@ -1167,10 +1165,10 @@ export default function App() {
   if (pantalla === PANTALLAS.MEDICO) {
     if (!medicoActivo || usuarioSesion?.rol !== "medico") {
       return (
-        <div style={S.pageCenter}>
+        <div className="tm-page-center" style={S.pageCenter}>
           <Toast toast={toast} />
 
-          <div style={S.cardRestrict}>
+          <div className="tm-card" style={S.cardRestrict}>
             <div style={{ fontSize: 42, marginBottom: 12 }}>🔒</div>
             <div style={S.restrictTitle}>Sesión médica no válida</div>
             <div style={S.restrictText}>Vuelva a ingresar con usuario y contraseña.</div>
@@ -1190,7 +1188,7 @@ export default function App() {
       <div style={S.page}>
         <Toast toast={toast} />
 
-        <div style={S.portalHeader}>
+        <div className="tm-portal-header" style={S.portalHeader}>
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
             <Av color={medicoActivo?.color} size={38} fontSize={14}>
               {medicoActivo?.nombre?.[0]}
@@ -1213,13 +1211,13 @@ export default function App() {
           </button>
         </div>
 
-        <div style={S.medicoWrap}>
-          <h1 style={S.pageTitle}>📅 Mi horario</h1>
+        <div className="tm-medico-wrap" style={S.medicoWrap}>
+          <h1 className="tm-page-title" style={S.pageTitle}>📅 Mi horario</h1>
           <p style={S.pageSubtitle}>
             Consulta tus turnos asignados por mes. Esta vista es solo informativa.
           </p>
 
-          <div style={S.monthSelector}>
+          <div className="tm-month-selector" style={S.monthSelector}>
             <button
               type="button"
               onClick={() => navMes(-1, setPropYear, setPropMes, propYear, propMes)}
@@ -1228,7 +1226,9 @@ export default function App() {
               ‹
             </button>
 
-            <span style={S.monthTitle}>{capFirst(mesLabel(propYear, propMes))}</span>
+            <span className="tm-month-title" style={S.monthTitle}>
+              {capFirst(mesLabel(propYear, propMes))}
+            </span>
 
             <button
               type="button"
@@ -1254,7 +1254,7 @@ export default function App() {
             </span>
           </div>
 
-          <div style={S.daysGrid}>
+          <div className="tm-days-grid" style={S.daysGrid}>
             {diasProp.map((d) => {
               const f = isoDate(d);
               const tipos = turnosDiaOrdenados(getTurnosDia(medicoActivo.id, f));
@@ -1267,7 +1267,9 @@ export default function App() {
                   key={f}
                   style={{
                     ...S.dayCard,
-                    border: `1px solid ${esHoy ? "#60a5fa" : esFin ? "#374151" : "#1e293b"}`,
+                    border: `1px solid ${
+                      esHoy ? "#60a5fa" : esFin ? "#374151" : "#1e293b"
+                    }`,
                   }}
                 >
                   <div style={S.dayLabel(esHoy, esFin)}>{diaLabel(d)}</div>
@@ -1299,8 +1301,8 @@ export default function App() {
   if (pantalla === PANTALLAS.REGISTRO) {
     if (!usuarioSesion || usuarioSesion.rol !== "coordinador") {
       return (
-        <div style={S.pageCenter}>
-          <div style={S.cardRestrict}>
+        <div className="tm-page-center" style={S.pageCenter}>
+          <div className="tm-card" style={S.cardRestrict}>
             <div style={{ fontSize: 42, marginBottom: 12 }}>🔒</div>
             <div style={S.restrictTitle}>Acceso restringido</div>
             <div style={S.restrictText}>
@@ -1327,7 +1329,7 @@ export default function App() {
           title="TurnosMed"
           subtitle="Registro de médicos"
           right={
-            <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+            <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
               <span style={S.badgeBlue}>
                 {medicos.length} médico{medicos.length !== 1 ? "s" : ""}
               </span>
@@ -1363,10 +1365,10 @@ export default function App() {
 
   if (!usuarioSesion || usuarioSesion.rol !== "coordinador") {
     return (
-      <div style={S.pageCenter}>
+      <div className="tm-page-center" style={S.pageCenter}>
         <Toast toast={toast} />
 
-        <div style={S.cardRestrict}>
+        <div className="tm-card" style={S.cardRestrict}>
           <div style={{ fontSize: 42, marginBottom: 12 }}>🔒</div>
           <div style={S.restrictTitle}>Acceso restringido</div>
           <div style={S.restrictText}>Debe ingresar como administrador.</div>
@@ -1380,11 +1382,11 @@ export default function App() {
   }
 
   return (
-    <div style={S.coordLayout}>
+    <div className="tm-coord-layout" style={S.coordLayout}>
       <Toast toast={toast} />
 
-      <aside style={S.sidebar}>
-        <div style={S.sidebarTop}>
+      <aside className="tm-sidebar" style={S.sidebar}>
+        <div className="tm-sidebar-top" style={S.sidebarTop}>
           <span style={{ fontSize: 24 }}>🏥</span>
           <div>
             <div style={S.sidebarTitle}>TurnosMed</div>
@@ -1392,7 +1394,7 @@ export default function App() {
           </div>
         </div>
 
-        <nav style={S.sideNav}>
+        <nav className="tm-side-nav" style={S.sideNav}>
           {[
             { key: VIEWS_COORD.HOY, icon: "📋", label: "Hoy" },
             { key: VIEWS_COORD.CALENDARIO, icon: "📅", label: "Calendario" },
@@ -1417,7 +1419,7 @@ export default function App() {
           ))}
         </nav>
 
-        <div style={S.sidebarBottom}>
+        <div className="tm-sidebar-bottom" style={S.sidebarBottom}>
           <button type="button" onClick={logout} style={S.sideLogout}>
             ← Cerrar sesión
           </button>
@@ -1437,8 +1439,8 @@ export default function App() {
         </div>
       </aside>
 
-      <main style={S.coordMain}>
-        <div style={S.configCard}>
+      <main className="tm-coord-main" style={S.coordMain}>
+        <div className="tm-config-card" style={S.configCard}>
           <div>
             <div style={S.configTitle}>💰 Configuración de tarifa por hora</div>
             <div style={S.configSub}>
@@ -1446,7 +1448,7 @@ export default function App() {
             </div>
           </div>
 
-          <div style={S.configActions}>
+          <div className="tm-config-actions" style={S.configActions}>
             <input
               type="number"
               min="1"
@@ -1529,11 +1531,22 @@ export default function App() {
 /* ============================================================================
    COMPONENTES
 ============================================================================ */
+function CreditBadge() {
+  return (
+    <div style={S.creditBadge}>
+      Programado por Fernando Rodriguez Bayona / Fundacion Valle de Lili / Cali, Colombia
+    </div>
+  );
+}
+
 function Toast({ toast }) {
   if (!toast) return null;
 
   return (
-    <div style={{ ...S.toast, background: toast.tipo === "ok" ? "#22c55e" : "#ef4444" }}>
+    <div
+      className="tm-toast"
+      style={{ ...S.toast, background: toast.tipo === "ok" ? "#22c55e" : "#ef4444" }}
+    >
       {toast.msg}
     </div>
   );
@@ -1563,7 +1576,7 @@ function Av({ color = "#4f8ef7", size = 38, fontSize = 14, children }) {
 
 function HeaderSimple({ title, subtitle, right }) {
   return (
-    <header style={S.simpleHeader}>
+    <header className="tm-simple-header" style={S.simpleHeader}>
       <div>
         <div style={S.simpleTitle}>{title}</div>
         <div style={S.simpleSub}>{subtitle}</div>
@@ -1625,9 +1638,9 @@ function RegistroMedicos({
   eliminarMedico,
 }) {
   return (
-    <div style={S.mainWrap}>
+    <div className="tm-main-wrap" style={S.mainWrap}>
       <div style={{ flex: "0 0 440px", minWidth: 300 }}>
-        <div style={S.card}>
+        <div className="tm-card" style={S.card}>
           <div style={S.cardHeaderBetween}>
             <h2 style={S.cardTitle}>{editId ? "✏️ Editar médico" : "➕ Nuevo médico"}</h2>
 
@@ -1646,7 +1659,7 @@ function RegistroMedicos({
             )}
           </div>
 
-          <div style={S.fg2}>
+          <div className="tm-fg2" style={S.fg2}>
             <Campo label="Nombre *" err={errores.nombre}>
               <input
                 style={inputStyle(!!errores.nombre)}
@@ -1664,7 +1677,7 @@ function RegistroMedicos({
             </Campo>
           </div>
 
-          <div style={S.fg2}>
+          <div className="tm-fg2" style={S.fg2}>
             <Campo label="Tipo doc *">
               <select
                 style={inputStyle(false)}
@@ -1700,7 +1713,7 @@ function RegistroMedicos({
             </select>
           </Campo>
 
-          <div style={S.fg2}>
+          <div className="tm-fg2" style={S.fg2}>
             <Campo label="Registro médico *" err={errores.registro_medico}>
               <input
                 style={inputStyle(!!errores.registro_medico)}
@@ -1738,7 +1751,7 @@ function RegistroMedicos({
             />
           </Campo>
 
-          <div style={S.fg2}>
+          <div className="tm-fg2" style={S.fg2}>
             <Campo label="Teléfono *" err={errores.telefono}>
               <input
                 style={inputStyle(!!errores.telefono)}
@@ -1767,12 +1780,16 @@ function RegistroMedicos({
         <div style={S.listTitle}>Médicos registrados ({medicos.length})</div>
 
         {medicos.length === 0 && (
-          <div style={S.emptyCard}>Registre médicos para comenzar.</div>
+          <div className="tm-card" style={S.emptyCard}>Registre médicos para comenzar.</div>
         )}
 
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           {medicos.map((med) => (
-            <div key={med.id} style={{ ...S.medCard, borderLeft: `3px solid ${med.color}` }}>
+            <div
+              key={med.id}
+              className="tm-med-card"
+              style={{ ...S.medCard, borderLeft: `3px solid ${med.color}` }}
+            >
               <Av color={med.color} size={42} fontSize={14}>
                 {med.nombre?.[0]}
                 {med.apellido?.[0]}
@@ -1824,14 +1841,14 @@ function VistaHoy({ medicos, fecha, getTurnosDia, getHorasExtraDia, horasDiaTota
     <section>
       <PageHeader title="Hoy" sub={`Resumen de turnos para ${fecha}`} />
 
-      <div style={S.cardsGrid}>
+      <div className="tm-cards-grid" style={S.cardsGrid}>
         {medicos.map((med) => {
           const tipos = turnosDiaOrdenados(getTurnosDia(med.id, fecha));
           const extra = getHorasExtraDia(med.id, fecha);
           const total = horasDiaTotal(med.id, fecha);
 
           return (
-            <div key={med.id} style={S.card}>
+            <div key={med.id} className="tm-card" style={S.card}>
               <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
                 <Av color={med.color}>
                   {med.nombre?.[0]}
@@ -1885,20 +1902,22 @@ function VistaCalendario({
     <section>
       <PageHeader title="Calendario" sub="Gestión mensual de turnos" />
 
-      <div style={S.monthSelector}>
+      <div className="tm-month-selector" style={S.monthSelector}>
         <button type="button" onClick={() => navMes(-1, setYear, setMonth, year, month)} style={S.bnav}>
           ‹
         </button>
 
-        <span style={S.monthTitle}>{capFirst(mesLabel(year, month))}</span>
+        <span className="tm-month-title" style={S.monthTitle}>
+          {capFirst(mesLabel(year, month))}
+        </span>
 
         <button type="button" onClick={() => navMes(1, setYear, setMonth, year, month)} style={S.bnav}>
           ›
         </button>
       </div>
 
-      <div style={S.calendarScroll}>
-        <table style={S.calendarTable}>
+      <div className="tm-calendar-scroll" style={S.calendarScroll}>
+        <table className="tm-calendar-table" style={S.calendarTable}>
           <thead>
             <tr>
               <th style={S.th}>Médico</th>
@@ -2025,10 +2044,10 @@ function VistaMedicos({
         }
       />
 
-      <div style={S.card}>
+      <div className="tm-card" style={S.card}>
         <div style={S.secTitle}>Crear otro administrador</div>
 
-        <div style={S.grid4}>
+        <div className="tm-grid4" style={S.grid4}>
           <Campo label="Nombre administrador">
             <input
               value={adminForm.nombre}
@@ -2085,15 +2104,15 @@ function VistaMedicos({
           <div style={S.miniTitle}>Administradores registrados</div>
 
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            <div style={S.adminRow}>
+            <div className="tm-admin-row" style={S.adminRow}>
               <span>Fernando Rodriguez Bayona</span>
               <span>Cédula {ADMIN_CEDULA_FIJA}</span>
               <span>Administrador principal fijo</span>
             </div>
 
             {administradores.map((u) => (
-              <div key={u.id} style={S.adminRow}>
-                <span>{u.username}</span>
+              <div key={u.id} className="tm-admin-row" style={S.adminRow}>
+                <span>{u.nombre || u.username}</span>
                 <span>Cédula {u.cedula || "sin cédula"}</span>
                 <span>{u.rol}</span>
               </div>
@@ -2102,10 +2121,10 @@ function VistaMedicos({
         </div>
       </div>
 
-      <div style={S.card}>
+      <div className="tm-card" style={S.card}>
         <div style={S.secTitle}>Crear acceso para médico</div>
 
-        <div style={S.grid3}>
+        <div className="tm-grid3" style={S.grid3}>
           <FieldSelect
             label="Médico"
             value={userForm.medico_id}
@@ -2153,10 +2172,10 @@ function VistaMedicos({
         </button>
       </div>
 
-      <div style={S.card}>
+      <div className="tm-card" style={S.card}>
         <div style={S.secTitle}>Resetear contraseña</div>
 
-        <div style={S.grid3}>
+        <div className="tm-grid3" style={S.grid3}>
           <FieldSelect
             label="Usuario médico"
             value={resetPassForm.usuario_id}
@@ -2199,10 +2218,10 @@ function VistaMedicos({
         </div>
       </div>
 
-      <div style={S.card}>
+      <div className="tm-card" style={S.card}>
         <div style={S.secTitle}>Horas adicionales</div>
 
-        <div style={S.grid4}>
+        <div className="tm-grid4" style={S.grid4}>
           <FieldSelect
             label="Médico"
             value={extraForm.medico_id}
@@ -2250,14 +2269,14 @@ function VistaMedicos({
         </button>
       </div>
 
-      <div style={S.cardsGrid}>
+      <div className="tm-cards-grid" style={S.cardsGrid}>
         {medicos.map((med) => {
           const usuario = getUsuarioMedico(med.id);
           const horas = horasMes(med.id, year, month);
           const salario = salarioMes(med.id, year, month);
 
           return (
-            <div key={med.id} style={S.card}>
+            <div key={med.id} className="tm-card" style={S.card}>
               <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
                 <Av color={med.color}>
                   {med.nombre?.[0]}
@@ -2296,13 +2315,13 @@ function VistaSolicitudes({
     <section>
       <PageHeader title="Propuestas y solicitudes" sub="Resumen de solicitudes del personal médico" />
 
-      <div style={S.cardsGrid}>
+      <div className="tm-cards-grid" style={S.cardsGrid}>
         <SolicitudBox title="Propuestas de horario" count={solicHorario.length} />
         <SolicitudBox title="Cambios de turno" count={solicitudesCambioTurno.length} />
         <SolicitudBox title="Cesiones de turno" count={solicitudesCesionTurno.length} />
       </div>
 
-      <div style={S.card}>
+      <div className="tm-card" style={S.card}>
         <div style={S.secTitle}>Solicitudes recientes</div>
 
         {[...solicitudesCambioTurno, ...solicitudesCesionTurno].length === 0 && (
@@ -2347,7 +2366,7 @@ function VistaSolicitudes({
 
 function SolicitudBox({ title, count }) {
   return (
-    <div style={S.card}>
+    <div className="tm-card" style={S.card}>
       <div style={S.configTitle}>{title}</div>
       <div style={{ fontSize: 32, fontWeight: 900, color: "#f1f5f9", marginTop: 10 }}>
         {count}
@@ -2358,9 +2377,9 @@ function SolicitudBox({ title, count }) {
 
 function PageHeader({ title, sub, action }) {
   return (
-    <div style={S.pageHeader}>
+    <div className="tm-page-header" style={S.pageHeader}>
       <div>
-        <h1 style={S.pageTitle}>{title}</h1>
+        <h1 className="tm-page-title" style={S.pageTitle}>{title}</h1>
         <p style={S.pageSubtitle}>{sub}</p>
       </div>
 
@@ -2395,6 +2414,24 @@ const S = {
       'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
   },
 
+  creditBadge: {
+    position: "fixed",
+    top: 12,
+    left: 12,
+    zIndex: 20,
+    maxWidth: "calc(100vw - 24px)",
+    background: "rgba(15, 23, 42, 0.82)",
+    border: "1px solid rgba(148, 163, 184, 0.18)",
+    borderRadius: 999,
+    color: "#94a3b8",
+    fontSize: 11,
+    fontWeight: 800,
+    lineHeight: 1.4,
+    padding: "7px 11px",
+    backdropFilter: "blur(8px)",
+    boxShadow: "0 10px 30px rgba(0,0,0,0.24)",
+  },
+
   appTitle: {
     fontSize: 28,
     fontWeight: 900,
@@ -2406,13 +2443,6 @@ const S = {
     fontSize: 14,
     color: "#64748b",
     marginTop: 6,
-  },
-
-  creatorText: {
-    marginTop: 10,
-    color: "#94a3b8",
-    fontSize: 12,
-    fontWeight: 700,
   },
 
   loginCard: {
