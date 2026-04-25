@@ -111,6 +111,37 @@ async function ensureIndex(name, sql) {
   }
 }
 
+async function ensureSolicitudesSchema() {
+  await ensureColumn("solicitudes_cambio_turno", "medico_solicitante_id", "INTEGER");
+  await ensureColumn("solicitudes_cambio_turno", "medico_destino_id", "INTEGER");
+  await ensureColumn("solicitudes_cambio_turno", "fecha_origen", "TEXT");
+  await ensureColumn("solicitudes_cambio_turno", "tipo_turno_origen", "TEXT");
+  await ensureColumn("solicitudes_cambio_turno", "fecha_destino", "TEXT");
+  await ensureColumn("solicitudes_cambio_turno", "tipo_turno_destino", "TEXT");
+  await ensureColumn("solicitudes_cambio_turno", "mensaje", "TEXT");
+  await ensureColumn("solicitudes_cambio_turno", "estado", "TEXT DEFAULT 'pendiente'");
+  await ensureColumn("solicitudes_cambio_turno", "fecha_solicitud", "TEXT DEFAULT CURRENT_TIMESTAMP");
+  await ensureColumn("solicitudes_cambio_turno", "updated_at", "TEXT");
+
+  await ensureColumn("solicitudes_cesion_turno", "medico_solicitante_id", "INTEGER");
+  await ensureColumn("solicitudes_cesion_turno", "medico_receptor_id", "INTEGER");
+  await ensureColumn("solicitudes_cesion_turno", "fecha", "TEXT");
+  await ensureColumn("solicitudes_cesion_turno", "tipo_turno", "TEXT");
+  await ensureColumn("solicitudes_cesion_turno", "mensaje", "TEXT");
+  await ensureColumn("solicitudes_cesion_turno", "estado", "TEXT DEFAULT 'pendiente'");
+  await ensureColumn("solicitudes_cesion_turno", "fecha_solicitud", "TEXT DEFAULT CURRENT_TIMESTAMP");
+  await ensureColumn("solicitudes_cesion_turno", "updated_at", "TEXT");
+
+  await ensureColumn("solicitudes_horario", "medico_id", "INTEGER");
+  await ensureColumn("solicitudes_horario", "year", "INTEGER");
+  await ensureColumn("solicitudes_horario", "mes", "INTEGER");
+  await ensureColumn("solicitudes_horario", "mes_programacion", "INTEGER");
+  await ensureColumn("solicitudes_horario", "mensaje", "TEXT");
+  await ensureColumn("solicitudes_horario", "estado", "TEXT DEFAULT 'pendiente'");
+  await ensureColumn("solicitudes_horario", "fecha_solicitud", "TEXT DEFAULT CURRENT_TIMESTAMP");
+  await ensureColumn("solicitudes_horario", "updated_at", "TEXT");
+}
+
 function ok(res, data) {
   return res.json(data);
 }
@@ -650,45 +681,7 @@ async function initDB() {
   await ensureColumn("horas_adicionales", "created_at", "TEXT DEFAULT CURRENT_TIMESTAMP");
   await ensureColumn("horas_adicionales", "updated_at", "TEXT");
 
-  await ensureColumn("solicitudes_cambio_turno", "medico_solicitante_id", "INTEGER");
-  await ensureColumn("solicitudes_cambio_turno", "medico_destino_id", "INTEGER");
-  await ensureColumn("solicitudes_cambio_turno", "fecha_origen", "TEXT");
-  await ensureColumn("solicitudes_cambio_turno", "tipo_turno_origen", "TEXT");
-  await ensureColumn("solicitudes_cambio_turno", "fecha_destino", "TEXT");
-  await ensureColumn("solicitudes_cambio_turno", "tipo_turno_destino", "TEXT");
-  await ensureColumn("solicitudes_cambio_turno", "mensaje", "TEXT");
-  await ensureColumn("solicitudes_cambio_turno", "estado", "TEXT DEFAULT 'pendiente'");
-  await ensureColumn(
-    "solicitudes_cambio_turno",
-    "fecha_solicitud",
-    "TEXT DEFAULT CURRENT_TIMESTAMP"
-  );
-  await ensureColumn("solicitudes_cambio_turno", "updated_at", "TEXT");
-
-  await ensureColumn("solicitudes_cesion_turno", "medico_solicitante_id", "INTEGER");
-  await ensureColumn("solicitudes_cesion_turno", "medico_receptor_id", "INTEGER");
-  await ensureColumn("solicitudes_cesion_turno", "fecha", "TEXT");
-  await ensureColumn("solicitudes_cesion_turno", "tipo_turno", "TEXT");
-  await ensureColumn("solicitudes_cesion_turno", "mensaje", "TEXT");
-  await ensureColumn("solicitudes_cesion_turno", "estado", "TEXT DEFAULT 'pendiente'");
-  await ensureColumn(
-    "solicitudes_cesion_turno",
-    "fecha_solicitud",
-    "TEXT DEFAULT CURRENT_TIMESTAMP"
-  );
-  await ensureColumn("solicitudes_cesion_turno", "updated_at", "TEXT");
-
-  await ensureColumn("solicitudes_horario", "medico_id", "INTEGER");
-  await ensureColumn("solicitudes_horario", "year", "INTEGER");
-  await ensureColumn("solicitudes_horario", "mes", "INTEGER");
-  await ensureColumn("solicitudes_horario", "mes_programacion", "INTEGER");
-  await ensureColumn("solicitudes_horario", "estado", "TEXT DEFAULT 'pendiente'");
-  await ensureColumn(
-    "solicitudes_horario",
-    "fecha_solicitud",
-    "TEXT DEFAULT CURRENT_TIMESTAMP"
-  );
-  await ensureColumn("solicitudes_horario", "updated_at", "TEXT");
+  await ensureSolicitudesSchema();
 
   await ensureIndex(
     "idx_medicos_documento",
@@ -1789,6 +1782,8 @@ app.put("/configuracion/tarifa-hora", requireAdmin, async (req, res) => {
 ============================================================================ */
 app.get("/solicitudes-cambio-turno", requireAuth, async (req, res) => {
   try {
+    await ensureSolicitudesSchema();
+
     const medicoId = Number(req.auth?.medico_id);
     const filtroMedico = isAdminRol(req.auth?.rol)
       ? { where: "", params: [] }
@@ -1815,6 +1810,8 @@ app.get("/solicitudes-cambio-turno", requireAuth, async (req, res) => {
 
 app.post("/solicitudes-cambio-turno", requireAuth, async (req, res) => {
   try {
+    await ensureSolicitudesSchema();
+
     const medico_solicitante_id = Number(
       req.body.medico_solicitante_id || req.body.medico_id
     );
@@ -1916,6 +1913,8 @@ app.post("/solicitudes-cambio-turno", requireAuth, async (req, res) => {
 
 app.put("/solicitudes-cambio-turno/:id/aprobar", requireAdmin, async (req, res) => {
   try {
+    await ensureSolicitudesSchema();
+
     const id = Number(req.params.id);
 
     const solicitud = await get(
@@ -2023,6 +2022,8 @@ app.put("/solicitudes-cambio-turno/:id/aprobar", requireAdmin, async (req, res) 
 
 app.put("/solicitudes-cambio-turno/:id/rechazar", requireAdmin, async (req, res) => {
   try {
+    await ensureSolicitudesSchema();
+
     const id = Number(req.params.id);
 
     const solicitud = await get(
@@ -2064,6 +2065,8 @@ app.put("/solicitudes-cambio-turno/:id/rechazar", requireAdmin, async (req, res)
 ============================================================================ */
 app.get("/solicitudes-cesion-turno", requireAuth, async (req, res) => {
   try {
+    await ensureSolicitudesSchema();
+
     const medicoId = Number(req.auth?.medico_id);
     const filtroMedico = isAdminRol(req.auth?.rol)
       ? { where: "", params: [] }
@@ -2090,6 +2093,8 @@ app.get("/solicitudes-cesion-turno", requireAuth, async (req, res) => {
 
 app.post("/solicitudes-cesion-turno", requireAuth, async (req, res) => {
   try {
+    await ensureSolicitudesSchema();
+
     const medico_solicitante_id = Number(
       req.body.medico_solicitante_id || req.body.medico_id
     );
@@ -2171,6 +2176,8 @@ app.post("/solicitudes-cesion-turno", requireAuth, async (req, res) => {
 
 app.put("/solicitudes-cesion-turno/:id/aprobar", requireAdmin, async (req, res) => {
   try {
+    await ensureSolicitudesSchema();
+
     const id = Number(req.params.id);
 
     const solicitud = await get(
@@ -2248,6 +2255,8 @@ app.put("/solicitudes-cesion-turno/:id/aprobar", requireAdmin, async (req, res) 
 
 app.put("/solicitudes-cesion-turno/:id/rechazar", requireAdmin, async (req, res) => {
   try {
+    await ensureSolicitudesSchema();
+
     const id = Number(req.params.id);
 
     const solicitud = await get(
@@ -2289,6 +2298,8 @@ app.put("/solicitudes-cesion-turno/:id/rechazar", requireAdmin, async (req, res)
 ============================================================================ */
 app.get("/solicitudes-horario", requireAuth, async (req, res) => {
   try {
+    await ensureSolicitudesSchema();
+
     const medicoId = Number(req.auth?.medico_id);
     const filtroMedico = isAdminRol(req.auth?.rol)
       ? { where: "", params: [] }
@@ -2312,6 +2323,8 @@ app.get("/solicitudes-horario", requireAuth, async (req, res) => {
 
 app.post("/solicitudes-horario", requireAuth, async (req, res) => {
   try {
+    await ensureSolicitudesSchema();
+
     const medico_id = Number(req.body.medico_id || req.body.medico_solicitante_id);
     const year = req.body.year ? Number(req.body.year) : null;
     const mes = req.body.mes ? Number(req.body.mes) : null;
@@ -2373,6 +2386,8 @@ app.post("/solicitudes-horario", requireAuth, async (req, res) => {
 
 app.put("/solicitudes-horario/:id/aprobar", requireAdmin, async (req, res) => {
   try {
+    await ensureSolicitudesSchema();
+
     const id = Number(req.params.id);
 
     const solicitud = await get("SELECT * FROM solicitudes_horario WHERE id = ?", [
@@ -2409,6 +2424,8 @@ app.put("/solicitudes-horario/:id/aprobar", requireAdmin, async (req, res) => {
 
 app.put("/solicitudes-horario/:id/rechazar", requireAdmin, async (req, res) => {
   try {
+    await ensureSolicitudesSchema();
+
     const id = Number(req.params.id);
 
     const solicitud = await get("SELECT * FROM solicitudes_horario WHERE id = ?", [
