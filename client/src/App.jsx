@@ -25,6 +25,8 @@ const VIEWS_MEDICO = {
   HORARIO: "horario",
   SOLICITUDES: "solicitudes",
   PACIENTES: "pacientes",
+  GLOBAL: "global",
+  PERFIL: "perfil",
 };
 
 const ESTADOS = {
@@ -148,6 +150,21 @@ const ADMIN_FORM0 = {
 const RESET_PASS_FORM0 = {
   usuario_id: "",
   nuevaPassword: "",
+};
+
+const CAMBIO_PASS_FORM0 = {
+  actualPassword: "",
+  nuevaPassword: "",
+  confirmarPassword: "",
+};
+
+const DATOS_REGISTRO_FORM0 = {
+  registro_medico: "",
+  telefono: "",
+  email: "",
+  especialidad: "",
+  fecha_ingreso: "",
+  cargo: "",
 };
 
 const SOL_CAMBIO0 = {
@@ -545,6 +562,9 @@ export default function App() {
   const [userForm, setUserForm] = useState(USER_FORM0);
   const [adminForm, setAdminForm] = useState(ADMIN_FORM0);
   const [resetPassForm, setResetPassForm] = useState(RESET_PASS_FORM0);
+  const [cambioPassForm, setCambioPassForm] = useState(CAMBIO_PASS_FORM0);
+  const [datosRegistroForm, setDatosRegistroForm] = useState(DATOS_REGISTRO_FORM0);
+  const [guardandoDatosRegistro, setGuardandoDatosRegistro] = useState(false);
 
   const [solCambioForm, setSolCambioForm] = useState(SOL_CAMBIO0);
   const [solCesionForm, setSolCesionForm] = useState(SOL_CESION0);
@@ -713,6 +733,42 @@ export default function App() {
       cargarPacientesCargo(medicoActivo.id);
     }
   }, [medicoActivo?.id, usuarioSesion?.id]);
+
+  useEffect(() => {
+    if (!medicoActivo?.id) return;
+
+    const actualizado = medicos.find((m) => Number(m.id) === Number(medicoActivo.id));
+    if (!actualizado) return;
+
+    const serialActual = JSON.stringify(medicoActivo);
+    const serialNuevo = JSON.stringify(actualizado);
+
+    if (serialActual !== serialNuevo) {
+      setMedicoActivo(actualizado);
+      localStorage.setItem("medicoActivo", JSON.stringify(actualizado));
+    }
+  }, [medicos, medicoActivo?.id]);
+
+  useEffect(() => {
+    if (!medicoActivo?.id) return;
+
+    setDatosRegistroForm({
+      registro_medico: medicoActivo.registro_medico || "",
+      telefono: medicoActivo.telefono || "",
+      email: medicoActivo.email || "",
+      especialidad: medicoActivo.especialidad || "",
+      fecha_ingreso: medicoActivo.fecha_ingreso || "",
+      cargo: medicoActivo.cargo || "Médico Hospitalario",
+    });
+  }, [
+    medicoActivo?.id,
+    medicoActivo?.registro_medico,
+    medicoActivo?.telefono,
+    medicoActivo?.email,
+    medicoActivo?.especialidad,
+    medicoActivo?.fecha_ingreso,
+    medicoActivo?.cargo,
+  ]);
 
   function navMes(dir, setY, setM, y, m) {
     let nm = m + dir;
@@ -1367,6 +1423,77 @@ export default function App() {
     }
   }
 
+  async function cambiarPasswordMedico() {
+    const actualPassword = String(cambioPassForm.actualPassword || "").trim();
+    const nuevaPassword = String(cambioPassForm.nuevaPassword || "").trim();
+    const confirmarPassword = String(cambioPassForm.confirmarPassword || "").trim();
+
+    if (!actualPassword || !nuevaPassword || !confirmarPassword) {
+      showToast("Completa la contraseña actual y la nueva contraseña", "err");
+      return;
+    }
+
+    if (nuevaPassword !== confirmarPassword) {
+      showToast("La confirmación no coincide con la nueva contraseña", "err");
+      return;
+    }
+
+    try {
+      await api("/usuarios/me/password", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ actualPassword, nuevaPassword }),
+      });
+
+      setCambioPassForm(CAMBIO_PASS_FORM0);
+      showToast("Contraseña actualizada correctamente");
+    } catch (error) {
+      console.error(error);
+      showToast(error.message || "No se pudo cambiar la contraseña", "err");
+    }
+  }
+
+  async function guardarDatosRegistroMedico() {
+    if (!medicoActivo?.id) {
+      showToast("Sesión médica no válida", "err");
+      return;
+    }
+
+    const payload = {
+      registro_medico: String(datosRegistroForm.registro_medico || "").trim(),
+      telefono: String(datosRegistroForm.telefono || "").trim(),
+      email: String(datosRegistroForm.email || "").trim(),
+      especialidad: String(datosRegistroForm.especialidad || "").trim(),
+      fecha_ingreso: String(datosRegistroForm.fecha_ingreso || "").trim(),
+      cargo: String(datosRegistroForm.cargo || "").trim(),
+    };
+
+    if (Object.values(payload).some((v) => !v)) {
+      showToast("Completa todos los datos del registro médico", "err");
+      return;
+    }
+
+    setGuardandoDatosRegistro(true);
+
+    try {
+      const medicoActualizado = await api(`/medicos/${medicoActivo.id}/datos-registro`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      setMedicoActivo(medicoActualizado);
+      localStorage.setItem("medicoActivo", JSON.stringify(medicoActualizado));
+      await cargarMedicos();
+      showToast("Datos del registro médico actualizados");
+    } catch (error) {
+      console.error(error);
+      showToast(error.message || "No se pudieron guardar los datos", "err");
+    } finally {
+      setGuardandoDatosRegistro(false);
+    }
+  }
+
   async function eliminarPacienteCargo(id) {
     try {
       await api(`/pacientes-cargo/${id}`, { method: "DELETE" });
@@ -1762,6 +1889,7 @@ export default function App() {
 
     const hMes = horasMes(medicoActivo.id, propYear, propMes);
     const sueldoMes = salarioMes(medicoActivo.id, propYear, propMes);
+    const requiereActualizarRegistro = Number(medicoActivo?.datos_registro_actualizados || 0) !== 1;
 
     return (
       <div style={S.page}>
@@ -1807,7 +1935,16 @@ export default function App() {
         </div>
 
         <div className="tm-medico-wrap" style={S.medicoWrap}>
-          <div style={S.medicoTopTabs}>
+          {requiereActualizarRegistro && (
+            <DatosRegistroObligatorio
+              datosRegistroForm={datosRegistroForm}
+              setDatosRegistroForm={setDatosRegistroForm}
+              guardarDatosRegistroMedico={guardarDatosRegistroMedico}
+              guardandoDatosRegistro={guardandoDatosRegistro}
+            />
+          )}
+
+          <div style={{ ...S.medicoTopTabs, display: requiereActualizarRegistro ? "none" : "flex" }}>
             <button
               type="button"
               onClick={() => setMedicoView(VIEWS_MEDICO.HORARIO)}
@@ -1831,9 +1968,25 @@ export default function App() {
             >
               Pacientes a cargo
             </button>
+
+            <button
+              type="button"
+              onClick={() => setMedicoView(VIEWS_MEDICO.GLOBAL)}
+              style={S.medicoTab(medicoView === VIEWS_MEDICO.GLOBAL)}
+            >
+              Calendario global
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setMedicoView(VIEWS_MEDICO.PERFIL)}
+              style={S.medicoTab(medicoView === VIEWS_MEDICO.PERFIL)}
+            >
+              Mi perfil
+            </button>
           </div>
 
-          {medicoView === VIEWS_MEDICO.HORARIO && (
+          {!requiereActualizarRegistro && medicoView === VIEWS_MEDICO.HORARIO && (
             <>
               <h1 className="tm-page-title" style={S.pageTitle}>
                 📅 Mi horario
@@ -1896,7 +2049,7 @@ export default function App() {
             </>
           )}
 
-          {medicoView === VIEWS_MEDICO.SOLICITUDES && (
+          {!requiereActualizarRegistro && medicoView === VIEWS_MEDICO.SOLICITUDES && (
             <SolicitudesMedico
               medicoActivo={medicoActivo}
               medicos={medicos}
@@ -1918,7 +2071,7 @@ export default function App() {
             />
           )}
 
-          {medicoView === VIEWS_MEDICO.PACIENTES && (
+          {!requiereActualizarRegistro && medicoView === VIEWS_MEDICO.PACIENTES && (
             <PacientesCargoMedico
               medicoActivo={medicoActivo}
               pacienteForm={pacienteForm}
@@ -1927,6 +2080,32 @@ export default function App() {
               pacientesTodos={pacientesTodos}
               crearPacienteCargo={crearPacienteCargo}
               eliminarPacienteCargo={eliminarPacienteCargo}
+            />
+          )}
+
+          {!requiereActualizarRegistro && medicoView === VIEWS_MEDICO.GLOBAL && (
+            <CalendarioGlobalMedicos
+              medicos={medicos}
+              diasProp={diasProp}
+              propYear={propYear}
+              propMes={propMes}
+              setPropYear={setPropYear}
+              setPropMes={setPropMes}
+              navMes={navMes}
+              getTurnosDia={getTurnosDia}
+            />
+          )}
+
+          {!requiereActualizarRegistro && medicoView === VIEWS_MEDICO.PERFIL && (
+            <PerfilMedico
+              medicoActivo={medicoActivo}
+              cambioPassForm={cambioPassForm}
+              setCambioPassForm={setCambioPassForm}
+              cambiarPasswordMedico={cambiarPasswordMedico}
+              datosRegistroForm={datosRegistroForm}
+              setDatosRegistroForm={setDatosRegistroForm}
+              guardarDatosRegistroMedico={guardarDatosRegistroMedico}
+              guardandoDatosRegistro={guardandoDatosRegistro}
             />
           )}
         </div>
@@ -2228,6 +2407,11 @@ function ResponsiveStyles() {
 
           .tm-medico-calendar-grid {
             display: grid !important;
+            grid-template-columns: repeat(7, minmax(0, 1fr)) !important;
+            gap: 3px !important;
+          }
+
+          .tm-global-calendar-grid {
             grid-template-columns: repeat(7, minmax(0, 1fr)) !important;
             gap: 3px !important;
           }
@@ -2770,6 +2954,306 @@ function PacientesCargoMedico({
               </div>
             </div>
           ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function DatosRegistroForm({
+  datosRegistroForm,
+  setDatosRegistroForm,
+  guardarDatosRegistroMedico,
+  guardandoDatosRegistro,
+  obligatorio = false,
+}) {
+  return (
+    <div className="tm-card" style={S.card}>
+      <div style={S.secTitle}>
+        {obligatorio ? "Actualiza tus datos de registro médico" : "Datos del registro médico"}
+      </div>
+      <p style={S.pageSubtitle}>
+        {obligatorio
+          ? "Esta actualización se solicita una sola vez al primer ingreso."
+          : "Mantén tus datos profesionales al día."}
+      </p>
+
+      <div className="tm-grid3" style={S.grid3}>
+        <Campo label="Registro médico">
+          <input
+            value={datosRegistroForm.registro_medico}
+            onChange={(e) =>
+              setDatosRegistroForm((p) => ({ ...p, registro_medico: e.target.value }))
+            }
+            style={inputStyle(false)}
+          />
+        </Campo>
+
+        <Campo label="Especialidad">
+          <select
+            value={datosRegistroForm.especialidad}
+            onChange={(e) =>
+              setDatosRegistroForm((p) => ({ ...p, especialidad: e.target.value }))
+            }
+            style={inputStyle(false)}
+          >
+            <option value="">Seleccione</option>
+            {ESPECIALIDADES.map((especialidad) => (
+              <option key={especialidad} value={especialidad}>
+                {especialidad}
+              </option>
+            ))}
+          </select>
+        </Campo>
+
+        <Campo label="Cargo">
+          <select
+            value={datosRegistroForm.cargo}
+            onChange={(e) => setDatosRegistroForm((p) => ({ ...p, cargo: e.target.value }))}
+            style={inputStyle(false)}
+          >
+            {[
+              "Médico Hospitalario",
+              "Médico Residente",
+              "Médico Especialista",
+              "Médico Urgencias",
+            ].map((cargo) => (
+              <option key={cargo} value={cargo}>
+                {cargo}
+              </option>
+            ))}
+          </select>
+        </Campo>
+      </div>
+
+      <div className="tm-grid3" style={S.grid3}>
+        <Campo label="Teléfono">
+          <input
+            value={datosRegistroForm.telefono}
+            onChange={(e) => setDatosRegistroForm((p) => ({ ...p, telefono: e.target.value }))}
+            style={inputStyle(false)}
+          />
+        </Campo>
+
+        <Campo label="Correo electrónico">
+          <input
+            type="email"
+            value={datosRegistroForm.email}
+            onChange={(e) => setDatosRegistroForm((p) => ({ ...p, email: e.target.value }))}
+            style={inputStyle(false)}
+          />
+        </Campo>
+
+        <Campo label="Fecha de ingreso">
+          <input
+            type="date"
+            value={datosRegistroForm.fecha_ingreso}
+            onChange={(e) =>
+              setDatosRegistroForm((p) => ({ ...p, fecha_ingreso: e.target.value }))
+            }
+            style={inputStyle(false)}
+          />
+        </Campo>
+      </div>
+
+      <button
+        type="button"
+        onClick={guardarDatosRegistroMedico}
+        disabled={guardandoDatosRegistro}
+        style={{ ...S.primaryButton, marginTop: 14, opacity: guardandoDatosRegistro ? 0.65 : 1 }}
+      >
+        {guardandoDatosRegistro ? "Guardando..." : "Guardar datos"}
+      </button>
+    </div>
+  );
+}
+
+function DatosRegistroObligatorio(props) {
+  return (
+    <section style={S.solicitudesMedicoSection}>
+      <PageHeader
+        title="Verificación de datos"
+        sub="Antes de continuar, confirma tus datos profesionales."
+      />
+      <DatosRegistroForm {...props} obligatorio />
+    </section>
+  );
+}
+
+function PerfilMedico({
+  medicoActivo,
+  cambioPassForm,
+  setCambioPassForm,
+  cambiarPasswordMedico,
+  datosRegistroForm,
+  setDatosRegistroForm,
+  guardarDatosRegistroMedico,
+  guardandoDatosRegistro,
+}) {
+  return (
+    <section style={S.solicitudesMedicoSection}>
+      <PageHeader title="Mi perfil" sub={`${medicoActivo?.nombre || ""} ${medicoActivo?.apellido || ""}`} />
+
+      <DatosRegistroForm
+        datosRegistroForm={datosRegistroForm}
+        setDatosRegistroForm={setDatosRegistroForm}
+        guardarDatosRegistroMedico={guardarDatosRegistroMedico}
+        guardandoDatosRegistro={guardandoDatosRegistro}
+      />
+
+      <div className="tm-card" style={S.card}>
+        <div style={S.secTitle}>Cambiar contraseña</div>
+
+        <div className="tm-grid3" style={S.grid3}>
+          <Campo label="Contraseña actual">
+            <input
+              type="password"
+              value={cambioPassForm.actualPassword}
+              onChange={(e) =>
+                setCambioPassForm((p) => ({ ...p, actualPassword: e.target.value }))
+              }
+              style={inputStyle(false)}
+            />
+          </Campo>
+
+          <Campo label="Nueva contraseña">
+            <input
+              type="password"
+              value={cambioPassForm.nuevaPassword}
+              onChange={(e) =>
+                setCambioPassForm((p) => ({ ...p, nuevaPassword: e.target.value }))
+              }
+              style={inputStyle(false)}
+            />
+          </Campo>
+
+          <Campo label="Confirmar contraseña">
+            <input
+              type="password"
+              value={cambioPassForm.confirmarPassword}
+              onChange={(e) =>
+                setCambioPassForm((p) => ({ ...p, confirmarPassword: e.target.value }))
+              }
+              style={inputStyle(false)}
+            />
+          </Campo>
+        </div>
+
+        <button
+          type="button"
+          onClick={cambiarPasswordMedico}
+          style={{ ...S.primaryButton, marginTop: 14 }}
+        >
+          Actualizar contraseña
+        </button>
+      </div>
+    </section>
+  );
+}
+
+function CalendarioGlobalMedicos({
+  medicos,
+  diasProp,
+  propYear,
+  propMes,
+  setPropYear,
+  setPropMes,
+  navMes,
+  getTurnosDia,
+}) {
+  const offset = diasProp[0]?.getDay() || 0;
+  const celdasVacias = Array.from({ length: offset });
+
+  return (
+    <section style={S.solicitudesMedicoSection}>
+      <div style={S.pageHeader}>
+        <div>
+          <h1 style={S.pageTitle}>Calendario global</h1>
+          <p style={S.pageSubtitle}>Resumen mensual de todos los médicos de turno.</p>
+        </div>
+      </div>
+
+      <div className="tm-month-selector" style={S.monthSelector}>
+        <button
+          type="button"
+          onClick={() => navMes(-1, setPropYear, setPropMes, propYear, propMes)}
+          style={S.bnav}
+        >
+          ‹
+        </button>
+        <span className="tm-month-title" style={S.monthTitle}>
+          {capFirst(mesLabel(propYear, propMes))}
+        </span>
+        <button
+          type="button"
+          onClick={() => navMes(1, setPropYear, setPropMes, propYear, propMes)}
+          style={S.bnav}
+        >
+          ›
+        </button>
+      </div>
+
+      <div className="tm-medico-calendar-wrap" style={S.medicoCalendarWrap}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(7, minmax(0, 1fr))", gap: 6, marginBottom: 8 }}>
+          {["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"].map((dia) => (
+            <div key={dia} style={S.globalWeekLabel}>
+              {dia}
+            </div>
+          ))}
+        </div>
+
+        <div className="tm-global-calendar-grid" style={S.globalCalendarGrid}>
+          {celdasVacias.map((_, index) => (
+            <div key={`empty-${index}`} style={{ ...S.medicoDayCard, opacity: 0.25 }} />
+          ))}
+
+          {diasProp.map((d) => {
+            const fecha = isoDate(d);
+            const asignados = medicos
+              .map((med) => ({
+                med,
+                tipos: turnosDiaOrdenados(getTurnosDia(med.id, fecha)),
+              }))
+              .filter((item) => item.tipos.length > 0);
+
+            return (
+              <div
+                key={fecha}
+                className="tm-medico-day-card"
+                style={{
+                  ...S.medicoDayCard,
+                  minHeight: 142,
+                  border: fecha === HOY_ISO ? "1px solid #3b82f6" : "1px solid #1f2937",
+                }}
+              >
+                <div style={S.medicoDayHead}>
+                  <span style={S.medicoDayName}>{diaLabel(d)}</span>
+                  <span style={S.medicoDayNumber}>{diaNumero(d)}</span>
+                </div>
+
+                <div style={S.globalDoctorList}>
+                  {asignados.length === 0 && <span style={S.medicoFreeChip}>Libre</span>}
+                  {asignados.map(({ med, tipos }) => (
+                    <div key={med.id} style={S.globalDoctorChip}>
+                      <Av color={med.color} size={24} fontSize={9}>
+                        {med.nombre?.[0]}
+                        {med.apellido?.[0]}
+                      </Av>
+                      <div style={{ minWidth: 0 }}>
+                        <div style={S.globalDoctorInitials}>
+                          {med.nombre?.[0]}
+                          {med.apellido?.[0]}
+                        </div>
+                        <div style={S.globalDoctorTurns}>
+                          {tipos.map((tipo) => TIPOS_TURNO[tipo]?.label).join(" + ")}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
         </div>
       </div>
     </section>
@@ -4828,6 +5312,51 @@ const S = {
     display: "grid",
     gridTemplateColumns: "repeat(auto-fill, minmax(120px, 1fr))",
     gap: 10,
+  },
+
+  globalCalendarGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(7, minmax(0, 1fr))",
+    gap: 10,
+  },
+
+  globalWeekLabel: {
+    color: "#93c5fd",
+    fontSize: 11,
+    fontWeight: 900,
+    textAlign: "center",
+  },
+
+  globalDoctorList: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 6,
+  },
+
+  globalDoctorChip: {
+    display: "flex",
+    alignItems: "center",
+    gap: 7,
+    background: "#0b1528",
+    border: "1px solid #1e293b",
+    borderRadius: 9,
+    padding: "6px 7px",
+    minWidth: 0,
+  },
+
+  globalDoctorInitials: {
+    color: "#f8fafc",
+    fontSize: 12,
+    fontWeight: 900,
+  },
+
+  globalDoctorTurns: {
+    color: "#94a3b8",
+    fontSize: 10,
+    fontWeight: 800,
+    whiteSpace: "nowrap",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
   },
 
   medicoDayCard: {

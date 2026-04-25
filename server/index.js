@@ -741,6 +741,7 @@ async function initDB() {
       color TEXT,
       torre_asignada TEXT,
       piso_asignado TEXT,
+      datos_registro_actualizados INTEGER DEFAULT 0,
       activo INTEGER DEFAULT 1,
       created_at TEXT DEFAULT CURRENT_TIMESTAMP
     )
@@ -861,6 +862,7 @@ async function initDB() {
   await ensureColumn("medicos", "color", "TEXT");
   await ensureColumn("medicos", "torre_asignada", "TEXT");
   await ensureColumn("medicos", "piso_asignado", "TEXT");
+  await ensureColumn("medicos", "datos_registro_actualizados", "INTEGER DEFAULT 0");
   await ensureColumn("medicos", "activo", "INTEGER DEFAULT 1");
   await ensureColumn("medicos", "created_at", "TEXT DEFAULT CURRENT_TIMESTAMP");
 
@@ -1329,6 +1331,53 @@ app.get("/usuarios", requireAdmin, async (req, res) => {
     );
 
     return ok(res, rows.map(publicUser));
+  } catch (error) {
+    return fail(res, error);
+  }
+});
+
+app.put("/medicos/:id/datos-registro", requireAuth, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+
+    if (!id) {
+      return fail(res, new Error("ID inválido"), 400);
+    }
+
+    if (!canManageMedico(req, id)) {
+      return fail(res, new Error("No puedes actualizar datos de otro médico"), 403);
+    }
+
+    const registro_medico = cleanText(req.body.registro_medico);
+    const telefono = cleanText(req.body.telefono);
+    const email = cleanText(req.body.email);
+    const especialidad = cleanText(req.body.especialidad);
+    const fecha_ingreso = cleanText(req.body.fecha_ingreso);
+    const cargo = cleanText(req.body.cargo);
+
+    if (!registro_medico || !telefono || !email || !especialidad || !fecha_ingreso || !cargo) {
+      return fail(res, new Error("Todos los datos del registro médico son obligatorios"), 400);
+    }
+
+    await run(
+      `
+      UPDATE medicos
+      SET registro_medico = ?,
+          telefono = ?,
+          email = ?,
+          especialidad = ?,
+          fecha_ingreso = ?,
+          cargo = ?,
+          datos_registro_actualizados = 1
+      WHERE id = ?
+        AND activo = 1
+      `,
+      [registro_medico, telefono, email, especialidad, fecha_ingreso, cargo, id]
+    );
+
+    const medico = await get("SELECT * FROM medicos WHERE id = ? AND activo = 1", [id]);
+
+    return ok(res, await attachPisosAsignados(medico));
   } catch (error) {
     return fail(res, error);
   }
@@ -1940,6 +1989,37 @@ app.post("/horas-adicionales", requireAuth, async (req, res) => {
     );
 
     return ok(res, row);
+  } catch (error) {
+    return fail(res, error);
+  }
+});
+
+app.put("/usuarios/me/password", requireAuth, async (req, res) => {
+  try {
+    const actualPassword = cleanText(req.body.actualPassword || req.body.passwordActual);
+    const nuevaPassword = cleanText(req.body.nuevaPassword || req.body.password);
+
+    if (!actualPassword || !nuevaPassword) {
+      return fail(res, new Error("Contraseña actual y nueva contraseña son obligatorias"), 400);
+    }
+
+    if (nuevaPassword.length < 4) {
+      return fail(res, new Error("La nueva contraseña debe tener al menos 4 caracteres"), 400);
+    }
+
+    const usuario = await get("SELECT * FROM usuarios WHERE id = ? AND activo = 1", [req.auth.id]);
+
+    if (!usuario) {
+      return fail(res, new Error("Usuario no encontrado"), 404);
+    }
+
+    if (!passwordMatches(getStoredPassword(usuario), actualPassword)) {
+      return fail(res, new Error("La contraseña actual no es correcta"), 401);
+    }
+
+    await updateUserPassword(usuario.id, nuevaPassword);
+
+    return ok(res, { ok: true, message: "Contraseña actualizada correctamente" });
   } catch (error) {
     return fail(res, error);
   }
