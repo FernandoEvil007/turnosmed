@@ -1524,6 +1524,52 @@ export default function App() {
     }
   }
 
+  async function descargarCuentaCobroMedico() {
+    if (!medicoActivo?.id) {
+      showToast("Sesión médica no válida", "err");
+      return;
+    }
+
+    try {
+      const token = localStorage.getItem("authToken");
+      const res = await fetch(
+        `${API_URL}/medicos/${medicoActivo.id}/cuenta-cobro?year=${propYear}&mes=${propMes + 1}`,
+        {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        }
+      );
+
+      if (!res.ok) {
+        let data = null;
+        try {
+          data = await res.json();
+        } catch {
+          data = null;
+        }
+        throw new Error(data?.error || "No se pudo generar el Excel");
+      }
+
+      const blob = await res.blob();
+      const disposition = res.headers.get("Content-Disposition") || "";
+      const match = disposition.match(/filename="([^"]+)"/);
+      const filename =
+        match?.[1] || `cuenta_cobro_${medicoActivo.documento || medicoActivo.id}.xlsx`;
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      showToast("Excel generado correctamente");
+    } catch (error) {
+      console.error(error);
+      showToast(error.message || "No se pudo generar el Excel", "err");
+    }
+  }
+
   async function eliminarPacienteCargo(id) {
     try {
       await api(`/pacientes-cargo/${id}`, { method: "DELETE" });
@@ -2074,7 +2120,10 @@ export default function App() {
                 horasDiaTotal={horasDiaTotal}
               />
 
-              <ResumenTurnosMedico resumen={resumenTurnosMes(medicoActivo.id, propYear, propMes)} />
+              <ResumenTurnosMedico
+                resumen={resumenTurnosMes(medicoActivo.id, propYear, propMes)}
+                descargarCuentaCobroMedico={descargarCuentaCobroMedico}
+              />
 
               <HorasExtraMedico
                 medicoExtraForm={medicoExtraForm}
@@ -2997,7 +3046,7 @@ function PacientesCargoMedico({
   );
 }
 
-function ResumenTurnosMedico({ resumen }) {
+function ResumenTurnosMedico({ resumen, descargarCuentaCobroMedico }) {
   const filas = [
     { tipo: "DIA", nombre: "Turnos de 8 horas" },
     { tipo: "CENIZO", nombre: "Cenizos de 3 horas" },
@@ -3043,6 +3092,14 @@ function ResumenTurnosMedico({ resumen }) {
         <div style={{ ...S.summaryCell, ...S.summaryTotalCell }}>-</div>
         <div style={{ ...S.summaryCell, ...S.summaryTotalCell }}>{total}h</div>
       </div>
+
+      <button
+        type="button"
+        onClick={descargarCuentaCobroMedico}
+        style={{ ...S.primaryButton, marginTop: 14 }}
+      >
+        Generar cuenta de cobro Excel
+      </button>
     </div>
   );
 }

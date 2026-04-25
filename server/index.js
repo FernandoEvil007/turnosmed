@@ -3,11 +3,13 @@ const cors = require("cors");
 const sqlite3 = require("sqlite3").verbose();
 const path = require("path");
 const crypto = require("crypto");
+const ExcelJS = require("exceljs");
 
 const app = express();
 
 const PORT = process.env.PORT || 3001;
 const DB_PATH = process.env.DB_PATH || path.join(__dirname, "database.sqlite");
+const CUENTA_COBRO_TEMPLATE = path.join(__dirname, "templates", "cuenta_cobro_template.xlsx");
 
 const AUTH_SECRET =
   process.env.AUTH_SECRET || crypto.createHash("sha256").update(`${DB_PATH}:turnosmed`).digest("hex");
@@ -254,6 +256,34 @@ function toNull(value) {
 
 function fechaActualSql() {
   return new Date().toISOString();
+}
+
+function mesNombre(mesNumero) {
+  const meses = [
+    "ENERO",
+    "FEBRERO",
+    "MARZO",
+    "ABRIL",
+    "MAYO",
+    "JUNIO",
+    "JULIO",
+    "AGOSTO",
+    "SEPTIEMBRE",
+    "OCTUBRE",
+    "NOVIEMBRE",
+    "DICIEMBRE",
+  ];
+
+  return meses[Number(mesNumero) - 1] || "";
+}
+
+function nombreArchivoSeguro(texto) {
+  return cleanText(texto)
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-zA-Z0-9_-]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 90);
 }
 
 function base64url(input) {
@@ -2455,6 +2485,131 @@ app.put("/configuracion/tarifa-hora", requireAdmin, async (req, res) => {
     return ok(res, {
       tarifaHora,
     });
+  } catch (error) {
+    return fail(res, error);
+  }
+});
+
+/* ============================================================================
+   CUENTA DE COBRO
+============================================================================ */
+app.get("/medicos/:id/cuenta-cobro", requireAuth, async (req, res) => {
+  try {
+    const medicoId = Number(req.params.id);
+    const year = Number(req.query.year);
+    const mes = Number(req.query.mes || req.query.month);
+
+    if (!medicoId || !year || !mes || mes < 1 || mes > 12) {
+      return fail(res, new Error("Médico, año y mes son obligatorios"), 400);
+    }
+
+    if (!canManageMedico(req, medicoId)) {
+      return fail(res, new Error("No puedes generar cuenta de cobro de otro médico"), 403);
+    }
+
+    const medico = await get("SELECT * FROM medicos WHERE id = ? AND activo = 1", [medicoId]);
+
+    if (!medico) {
+      return fail(res, new Error("Médico no encontrado"), 404);
+    }
+
+    const mesTexto = mesNombre(mes);
+    const prefijoFecha = `${year}-${String(mes).padStart(2, "0")}-`;
+    const turnos = await all(
+      `
+      SELECT fecha, tipo_turno
+      FROM turnos
+      WHERE medico_id = ?
+        AND fecha LIKE ?
+      ORDER BY fecha ASC
+      `,
+      [medicoId, `${prefijoFecha}%`]
+    );
+    const extras = await all(
+      `
+      SELECT fecha, horas
+      FROM horas_adicionales
+      WHERE medico_id = ?
+        AND fecha LIKE ?
+      ORDER BY fecha ASC
+      `,
+      [medicoId, `${prefijoFecha}%`]
+    );
+    const configTarifa = await get("SELECT valor FROM configuracion WHERE clave = ?", ["tarifa_hora"]);
+    const tarifaHora = Number(configTarifa?.valor) || 119800;
+    const resumen = {
+      DIA: [],
+      FDS: [],
+      CENIZO: [],
+    };
+
+    turnos.forEach((turno) => {
+      if (!resumen[turno.tipo_turno]) return;
+      resumen[turno.tipo_turno].push(Number(String(turno.fecha).slice(-2)));
+    });
+
+    const horasExtra = extras.reduce((acc, item) => acc + Number(item.horas || 0), 0);
+    const diasExtra = extras.map((item) => Number(String(item.fecha).slice(-2)));
+    const totalHoras =
+      resumen.DIA.length * 8 +
+      resumen.FDS.length * 6 +
+      resumen.CENIZO.length * 3 +
+      horasExtra;
+
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.readFile(CUENTA_COBRO_TEMPLATE);
+
+    const sheet = workbook.getWorksheet("Cuenta de cobro") || workbook.worksheets[0];
+    const hoy = new Date();
+    const nombreMedico = `${medico.nombre || ""} ${medico.apellido || ""}`.trim().toUpperCase();
+
+    sheet.getCell("C2").value = `${mesTexto} ${hoy.getDate()}/ ${year}`;
+    sheet.getCell("C4").value = nombreMedico;
+    sheet.getCell("I4").value = Number(medico.documento) || medico.documento || "";
+    sheet.getCell("B7").value = `Por concepto de honorarios como ${medico.cargo || "Médico"} en ${
+      medico.especialidad || "Hospitalización"
+    } según los turnos correspondientes.`;
+    sheet.getCell("C10").value = mesTexto;
+    sheet.getCell("C14").value = resumen.DIA.length;
+    sheet.getCell("D15").value = 8;
+    sheet.getCell("C18").value = resumen.FDS.length;
+    sheet.getCell("D19").value = 6;
+    sheet.getCell("C22").value = resumen.CENIZO.length;
+    sheet.getCell("D23").value = 3;
+    sheet.getCell("B26").value = "Horas adicionales aprobadas:";
+    sheet.getCell("C26").value = diasExtra.length;
+    sheet.getCell("D27").value = horasExtra;
+    sheet.getCell("D34").value = totalHoras;
+    sheet.getCell("D36").value = tarifaHora;
+    sheet.getCell("D38").value = { formula: "D34*D36" };
+    sheet.getCell("B44").value = nombreMedico;
+    sheet.getCell("B45").value = `${medico.tipo_doc || "CC"}: ${medico.documento || ""}`;
+
+    [
+      { row: 14, dias: resumen.DIA },
+      { row: 18, dias: resumen.FDS },
+      { row: 22, dias: resumen.CENIZO },
+      { row: 26, dias: diasExtra },
+    ].forEach(({ row, dias }) => {
+      for (let col = 6; col <= 14; col += 1) {
+        sheet.getCell(row, col).value = null;
+      }
+
+      dias.slice(0, 9).forEach((dia, index) => {
+        sheet.getCell(row, 6 + index).value = dia;
+      });
+    });
+
+    const buffer = await workbook.xlsx.writeBuffer();
+    const filename = `cuenta_cobro_${nombreArchivoSeguro(nombreMedico)}_${mesTexto}_${year}.xlsx`;
+
+    res.setHeader(
+      "Content-Type",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    );
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+
+    return res.send(Buffer.from(buffer));
   } catch (error) {
     return fail(res, error);
   }
