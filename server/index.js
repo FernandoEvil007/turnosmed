@@ -87,7 +87,16 @@ async function ensureColumn(table, column, definition) {
   const exists = columns.some((c) => c.name === column);
 
   if (!exists) {
-    await run(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+    try {
+      await run(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+    } catch (error) {
+      if (String(error.message || "").includes("non-constant default")) {
+        await run(`ALTER TABLE ${table} ADD COLUMN ${column} TEXT`);
+        return;
+      }
+
+      throw error;
+    }
   }
 }
 
@@ -687,10 +696,6 @@ async function initDB() {
 
   console.log("Tablas verificadas correctamente");
 }
-
-initDB().catch((err) => {
-  console.error("Error inicializando base de datos:", err);
-});
 
 /* ============================================================================
    HEALTH
@@ -2436,7 +2441,14 @@ app.use((req, res) => {
 /* ============================================================================
    START
 ============================================================================ */
-app.listen(PORT, () => {
-  console.log(`Servidor TurnosMed corriendo en puerto ${PORT}`);
-});
+initDB()
+  .then(() => {
+    app.listen(PORT, () => {
+      console.log(`Servidor TurnosMed corriendo en puerto ${PORT}`);
+    });
+  })
+  .catch((err) => {
+    console.error("Error inicializando base de datos:", err);
+    process.exit(1);
+  });
 
