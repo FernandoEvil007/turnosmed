@@ -650,6 +650,12 @@ async function initDB() {
   await ensureColumn("horas_adicionales", "created_at", "TEXT DEFAULT CURRENT_TIMESTAMP");
   await ensureColumn("horas_adicionales", "updated_at", "TEXT");
 
+  await ensureColumn("solicitudes_cambio_turno", "medico_solicitante_id", "INTEGER");
+  await ensureColumn("solicitudes_cambio_turno", "medico_destino_id", "INTEGER");
+  await ensureColumn("solicitudes_cambio_turno", "fecha_origen", "TEXT");
+  await ensureColumn("solicitudes_cambio_turno", "tipo_turno_origen", "TEXT");
+  await ensureColumn("solicitudes_cambio_turno", "fecha_destino", "TEXT");
+  await ensureColumn("solicitudes_cambio_turno", "tipo_turno_destino", "TEXT");
   await ensureColumn("solicitudes_cambio_turno", "mensaje", "TEXT");
   await ensureColumn("solicitudes_cambio_turno", "estado", "TEXT DEFAULT 'pendiente'");
   await ensureColumn(
@@ -659,6 +665,10 @@ async function initDB() {
   );
   await ensureColumn("solicitudes_cambio_turno", "updated_at", "TEXT");
 
+  await ensureColumn("solicitudes_cesion_turno", "medico_solicitante_id", "INTEGER");
+  await ensureColumn("solicitudes_cesion_turno", "medico_receptor_id", "INTEGER");
+  await ensureColumn("solicitudes_cesion_turno", "fecha", "TEXT");
+  await ensureColumn("solicitudes_cesion_turno", "tipo_turno", "TEXT");
   await ensureColumn("solicitudes_cesion_turno", "mensaje", "TEXT");
   await ensureColumn("solicitudes_cesion_turno", "estado", "TEXT DEFAULT 'pendiente'");
   await ensureColumn(
@@ -668,6 +678,7 @@ async function initDB() {
   );
   await ensureColumn("solicitudes_cesion_turno", "updated_at", "TEXT");
 
+  await ensureColumn("solicitudes_horario", "medico_id", "INTEGER");
   await ensureColumn("solicitudes_horario", "year", "INTEGER");
   await ensureColumn("solicitudes_horario", "mes", "INTEGER");
   await ensureColumn("solicitudes_horario", "mes_programacion", "INTEGER");
