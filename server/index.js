@@ -13,9 +13,9 @@ const AUTH_SECRET =
   process.env.AUTH_SECRET || crypto.createHash("sha256").update(`${DB_PATH}:turnosmed`).digest("hex");
 
 const TORRES_PISOS = {
-  "Torre 2": ["6t2", "8t2", "9t2", "10t2", "11t2"],
-  "Torre 3": ["4t3", "5t3", "6t3", "7t3", "8t3", "9t3"],
-  "Torre 4": ["7t4"],
+  "Torre 2": ["t2p6", "t2p8", "t2p9", "t2p10", "t2p11"],
+  "Torre 3": ["t3p4", "t3p5", "t3p6", "t3p7", "t3p8", "t3p9"],
+  "Torre 4": ["t4p7"],
 };
 
 const TIPOS_TURNO_VALIDOS = ["DIA", "CENIZO", "FDS"];
@@ -919,6 +919,10 @@ app.post("/medicos", requireAdmin, async (req, res) => {
       return fail(res, new Error("Nombre, apellido y documento son obligatorios"), 400);
     }
 
+    if (!payload.torre_asignada || !payload.piso_asignado) {
+      return fail(res, new Error("La torre y el piso asignado son obligatorios"), 400);
+    }
+
     if (!validarTorrePiso(payload.torre_asignada, payload.piso_asignado)) {
       return fail(res, new Error("La torre y el piso asignado no son vÃ¡lidos"), 400);
     }
@@ -984,6 +988,10 @@ app.put("/medicos/:id", requireAdmin, async (req, res) => {
 
     if (!payload.nombre || !payload.apellido || !payload.documento) {
       return fail(res, new Error("Nombre, apellido y documento son obligatorios"), 400);
+    }
+
+    if (!payload.torre_asignada || !payload.piso_asignado) {
+      return fail(res, new Error("La torre y el piso asignado son obligatorios"), 400);
     }
 
     if (!validarTorrePiso(payload.torre_asignada, payload.piso_asignado)) {

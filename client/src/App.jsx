@@ -45,6 +45,12 @@ const COLORES = [
   "#7b4ff7",
 ];
 
+const TORRES_PISOS = {
+  "Torre 2": ["t2p6", "t2p8", "t2p9", "t2p10", "t2p11"],
+  "Torre 3": ["t3p4", "t3p5", "t3p6", "t3p7", "t3p8", "t3p9"],
+  "Torre 4": ["t4p7"],
+};
+
 const ESPECIALIDADES = [
   "Medicina Interna",
   "Cirugía General",
@@ -98,6 +104,8 @@ const FORM0 = {
   email: "",
   fecha_ingreso: "",
   cargo: "Médico Hospitalario",
+  torre_asignada: "",
+  piso_asignado: "",
 };
 
 const EXTRA_FORM0 = {
@@ -830,6 +838,8 @@ export default function App() {
 
     if (!form.nombre.trim()) e.nombre = "Requerido";
     if (!form.apellido.trim()) e.apellido = "Requerido";
+    if (!form.torre_asignada) e.torre_asignada = "Requerido";
+    if (!form.piso_asignado) e.piso_asignado = "Requerido";
 
     if (!doc) {
       e.documento = "Requerido";
@@ -927,6 +937,8 @@ export default function App() {
       email: med.email || "",
       fecha_ingreso: med.fecha_ingreso || "",
       cargo: med.cargo || "Médico Hospitalario",
+      torre_asignada: med.torre_asignada || "",
+      piso_asignado: med.piso_asignado || "",
     });
 
     setEditId(med.id);
@@ -2804,6 +2816,45 @@ function RegistroMedicos({
             </Campo>
           </div>
 
+          <div className="tm-fg2" style={S.fg2}>
+            <Campo label="Torre a cargo *" err={errores.torre_asignada}>
+              <select
+                style={inputStyle(!!errores.torre_asignada)}
+                value={form.torre_asignada}
+                onChange={(e) =>
+                  setForm((p) => ({
+                    ...p,
+                    torre_asignada: e.target.value,
+                    piso_asignado: "",
+                  }))
+                }
+              >
+                <option value="">-- Seleccione --</option>
+                {Object.keys(TORRES_PISOS).map((torre) => (
+                  <option key={torre} value={torre}>
+                    {torre}
+                  </option>
+                ))}
+              </select>
+            </Campo>
+
+            <Campo label="Piso a cargo *" err={errores.piso_asignado}>
+              <select
+                style={inputStyle(!!errores.piso_asignado)}
+                value={form.piso_asignado}
+                onChange={(e) => setForm((p) => ({ ...p, piso_asignado: e.target.value }))}
+                disabled={!form.torre_asignada}
+              >
+                <option value="">-- Seleccione --</option>
+                {(TORRES_PISOS[form.torre_asignada] || []).map((piso) => (
+                  <option key={piso} value={piso}>
+                    {piso.toUpperCase()}
+                  </option>
+                ))}
+              </select>
+            </Campo>
+          </div>
+
           <Campo label="Fecha de ingreso *" err={errores.fecha_ingreso}>
             <input
               type="date"
@@ -2878,6 +2929,11 @@ function RegistroMedicos({
 
                 <div style={{ marginTop: 5 }}>
                   <span style={S.tagBlue}>{med.cargo}</span>
+                  {med.torre_asignada && med.piso_asignado && (
+                    <span style={{ ...S.tagBlue, marginLeft: 6 }}>
+                      {med.torre_asignada} / {String(med.piso_asignado).toUpperCase()}
+                    </span>
+                  )}
                 </div>
               </div>
 
