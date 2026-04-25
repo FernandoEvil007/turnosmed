@@ -5,7 +5,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 ============================================================================ */
 const API_URL =
   import.meta.env.VITE_API_URL || "https://turnosmed-backend.onrender.com";
-  console.log("API_URL usada por la app:", API_URL);
+
+const ADMIN_CEDULA_FIJA = "6662672";
+const ADMIN_PASSWORD_FIJA = "6662672";
+
+console.log("API_URL usada por la app:", API_URL);
 
 const PANTALLAS = {
   SELECTOR: "selector",
@@ -54,9 +58,27 @@ const ESPECIALIDADES = [
 ];
 
 const TIPOS_TURNO = {
-  DIA: { label: "Día", horas: 8, color: "#3b82f6", bg: "#1e3a5f", emoji: "☀️" },
-  CENIZO: { label: "Cenizo", horas: 3, color: "#f59e0b", bg: "#3d2c00", emoji: "🌥️" },
-  FDS: { label: "Fin Sem.", horas: 6, color: "#8b5cf6", bg: "#2e1b5e", emoji: "📅" },
+  DIA: {
+    label: "Día",
+    horas: 8,
+    color: "#3b82f6",
+    bg: "#1e3a5f",
+    emoji: "☀️",
+  },
+  CENIZO: {
+    label: "Cenizo",
+    horas: 3,
+    color: "#f59e0b",
+    bg: "#3d2c00",
+    emoji: "🌥️",
+  },
+  FDS: {
+    label: "Fin Sem.",
+    horas: 6,
+    color: "#8b5cf6",
+    bg: "#2e1b5e",
+    emoji: "📅",
+  },
 };
 
 const TODAY = new Date();
@@ -90,6 +112,13 @@ const USER_FORM0 = {
   password: "",
 };
 
+const ADMIN_FORM0 = {
+  nombre: "",
+  cedula: "",
+  username: "",
+  password: "",
+};
+
 const RESET_PASS_FORM0 = {
   usuario_id: "",
   nuevaPassword: "",
@@ -101,10 +130,12 @@ const RESET_PASS_FORM0 = {
 function getDias(y, m) {
   const days = [];
   const d = new Date(y, m, 1);
+
   while (d.getMonth() === m) {
     days.push(new Date(d));
     d.setDate(d.getDate() + 1);
   }
+
   return days;
 }
 
@@ -150,6 +181,7 @@ function capFirst(text = "") {
 
 function formatCOP(valor) {
   const n = Number(valor);
+
   return new Intl.NumberFormat("es-CO", {
     style: "currency",
     currency: "COP",
@@ -160,9 +192,12 @@ function formatCOP(valor) {
 function mapearTurnos(data) {
   return (data || []).reduce((acc, t) => {
     if (!TIPOS_TURNO[t?.tipo_turno]) return acc;
+
     const key = `${t.medico_id}_${t.fecha}`;
+
     if (!acc[key]) acc[key] = [];
     if (!acc[key].includes(t.tipo_turno)) acc[key].push(t.tipo_turno);
+
     return acc;
   }, {});
 }
@@ -171,10 +206,12 @@ function mapearHorasAdicionales(data) {
   return (data || []).reduce((acc, item) => {
     const key = `${item.medico_id}_${item.fecha}`;
     const horas = Number(item?.horas || 0);
+
     acc[key] = {
       horas: Number.isFinite(horas) ? horas : 0,
       motivo: item?.motivo || "",
     };
+
     return acc;
   }, {});
 }
@@ -191,12 +228,9 @@ function getEstadoBg(estado) {
   return "#3d2c00";
 }
 
-function horasPorTipo(tipo) {
-  return TIPOS_TURNO[tipo]?.horas || 0;
-}
-
 function turnosDiaOrdenados(tipos = []) {
   const orden = { DIA: 1, CENIZO: 2, FDS: 3 };
+
   return [...tipos]
     .filter((t) => TIPOS_TURNO[t])
     .sort((a, b) => (orden[a] || 99) - (orden[b] || 99));
@@ -293,13 +327,15 @@ export default function App() {
   const [propYear, setPropYear] = useState(IY);
 
   const [adminCedula, setAdminCedula] = useState("");
+  const [adminPassword, setAdminPassword] = useState("");
   const [loginUser, setLoginUser] = useState("");
   const [loginPass, setLoginPass] = useState("");
   const [loginErr, setLoginErr] = useState("");
-  const [loginMode, setLoginMode] = useState("usuario");
+  const [loginMode, setLoginMode] = useState("admin");
 
   const [extraForm, setExtraForm] = useState(EXTRA_FORM0);
   const [userForm, setUserForm] = useState(USER_FORM0);
+  const [adminForm, setAdminForm] = useState(ADMIN_FORM0);
   const [resetPassForm, setResetPassForm] = useState(RESET_PASS_FORM0);
 
   const [toast, setToast] = useState(null);
@@ -315,7 +351,9 @@ export default function App() {
 
   function showToast(msg, tipo = "ok") {
     setToast({ msg, tipo });
+
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+
     toastTimerRef.current = setTimeout(() => setToast(null), 3200);
   }
 
@@ -376,6 +414,7 @@ export default function App() {
     try {
       const data = await api("/configuracion/tarifa-hora");
       const valor = Number(data?.tarifaHora) || 119800;
+
       setTarifaHora(valor);
       setTarifaHoraInput(String(valor));
     } catch {
@@ -441,13 +480,16 @@ export default function App() {
 
   function getTurnosDia(id, f) {
     const valor = turnos?.[`${id}_${f}`];
+
     if (!Array.isArray(valor)) return [];
+
     return valor.filter((t) => TIPOS_TURNO[t]);
   }
 
   function getHorasExtraDia(id, f) {
     const valor = horasAdicionales?.[`${id}_${f}`]?.horas;
     const n = Number(valor);
+
     return Number.isFinite(n) && n > 0 ? n : 0;
   }
 
@@ -483,6 +525,7 @@ export default function App() {
 
   function limpiarLogin() {
     setAdminCedula("");
+    setAdminPassword("");
     setLoginUser("");
     setLoginPass("");
     setLoginErr("");
@@ -498,17 +541,53 @@ export default function App() {
     setPantalla(PANTALLAS.SELECTOR);
   }
 
-  async function loginAdministradorCedula() {
-    if (!adminCedula.trim()) {
-      setLoginErr("Debes ingresar la cédula del administrador");
+  function entrarComoAdministradorFijo() {
+    const usuarioFijo = {
+      id: 0,
+      username: "Fernando Rodriguez Bayona",
+      rol: "coordinador",
+      medico_id: null,
+      cedula: ADMIN_CEDULA_FIJA,
+      activo: 1,
+      admin_fijo: true,
+    };
+
+    setUsuarioSesion(usuarioFijo);
+    setMedicoActivo(null);
+
+    localStorage.setItem("usuarioSesion", JSON.stringify(usuarioFijo));
+    localStorage.removeItem("medicoActivo");
+    localStorage.setItem("pantalla", PANTALLAS.COORD);
+
+    limpiarLogin();
+    setPantalla(PANTALLAS.COORD);
+  }
+
+  async function loginAdministradorCredenciales() {
+    const cedulaDigitada = String(adminCedula || "").trim();
+    const passwordDigitado = String(adminPassword || "").trim();
+
+    if (!cedulaDigitada || !passwordDigitado) {
+      setLoginErr("Debes ingresar cédula y contraseña del administrador");
+      return;
+    }
+
+    if (
+      cedulaDigitada === ADMIN_CEDULA_FIJA &&
+      passwordDigitado === ADMIN_PASSWORD_FIJA
+    ) {
+      entrarComoAdministradorFijo();
       return;
     }
 
     try {
-      const data = await api("/login-admin-cedula", {
+      const data = await api("/login-admin", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ cedula: adminCedula.trim() }),
+        body: JSON.stringify({
+          cedula: cedulaDigitada,
+          password: passwordDigitado,
+        }),
       });
 
       if (!data?.usuario) {
@@ -517,7 +596,7 @@ export default function App() {
       }
 
       if (data.usuario.rol !== "coordinador" && data.usuario.rol !== "administrador") {
-        setLoginErr("La cédula no pertenece a un administrador");
+        setLoginErr("Este usuario no tiene permisos de administrador");
         return;
       }
 
@@ -528,6 +607,7 @@ export default function App() {
 
       setUsuarioSesion(usuarioNormalizado);
       setMedicoActivo(null);
+
       localStorage.setItem("usuarioSesion", JSON.stringify(usuarioNormalizado));
       localStorage.removeItem("medicoActivo");
       localStorage.setItem("pantalla", PANTALLAS.COORD);
@@ -536,7 +616,9 @@ export default function App() {
       setPantalla(PANTALLAS.COORD);
     } catch (error) {
       console.error(error);
-      setLoginErr(error.message || "No se pudo iniciar sesión como administrador");
+      setLoginErr(
+        "Administrador no válido. Si es un administrador nuevo, falta actualizar el backend con /login-admin."
+      );
     }
   }
 
@@ -562,7 +644,7 @@ export default function App() {
       }
 
       if (data.usuario.rol === "coordinador" || data.usuario.rol === "administrador") {
-        setLoginErr("El administrador debe ingresar solo con cédula");
+        setLoginErr("El administrador debe ingresar por la pestaña Administrador");
         return;
       }
 
@@ -602,8 +684,9 @@ export default function App() {
     if (!form.nombre.trim()) e.nombre = "Requerido";
     if (!form.apellido.trim()) e.apellido = "Requerido";
 
-    if (!doc) e.documento = "Requerido";
-    else if (
+    if (!doc) {
+      e.documento = "Requerido";
+    } else if (
       medicos.find((m) => String(m.documento) === String(doc) && m.id !== editId)
     ) {
       e.documento = "Documento ya registrado";
@@ -612,11 +695,17 @@ export default function App() {
     if (!form.especialidad) e.especialidad = "Seleccione especialidad";
     if (!form.registro_medico.trim()) e.registro_medico = "Requerido";
 
-    if (!tel) e.telefono = "Requerido";
-    else if (!/^[0-9+\-\s()]{7,20}$/.test(tel)) e.telefono = "Teléfono inválido";
+    if (!tel) {
+      e.telefono = "Requerido";
+    } else if (!/^[0-9+\-\s()]{7,20}$/.test(tel)) {
+      e.telefono = "Teléfono inválido";
+    }
 
-    if (!email) e.email = "Requerido";
-    else if (!/^\S+@\S+\.\S+$/.test(email)) e.email = "Email inválido";
+    if (!email) {
+      e.email = "Requerido";
+    } else if (!/^\S+@\S+\.\S+$/.test(email)) {
+      e.email = "Email inválido";
+    }
 
     if (!form.fecha_ingreso) e.fecha_ingreso = "Requerido";
     if (!form.cargo) e.cargo = "Requerido";
@@ -692,6 +781,7 @@ export default function App() {
       fecha_ingreso: med.fecha_ingreso || "",
       cargo: med.cargo || "Médico Hospitalario",
     });
+
     setEditId(med.id);
     setErrores({});
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -703,12 +793,14 @@ export default function App() {
 
     try {
       await api(`/medicos/${id}`, { method: "DELETE" });
+
       await Promise.all([
         cargarMedicos(),
         cargarUsuarios(),
         cargarTurnos(),
         cargarHorasAdicionales(),
       ]);
+
       showToast("Médico eliminado correctamente ✓");
     } catch (error) {
       console.error(error);
@@ -744,6 +836,45 @@ export default function App() {
     } catch (error) {
       console.error(error);
       showToast(error.message || "No se pudo crear el usuario", "err");
+    }
+  }
+
+  async function crearAdministrador() {
+    const nombre = String(adminForm.nombre || "").trim();
+    const cedula = String(adminForm.cedula || "").trim();
+    const username = String(adminForm.username || "").trim() || cedula;
+    const password = String(adminForm.password || "").trim();
+
+    if (!nombre || !cedula || !password) {
+      showToast("Completa nombre, cédula y contraseña del nuevo administrador", "err");
+      return;
+    }
+
+    if (cedula === ADMIN_CEDULA_FIJA) {
+      showToast("Esa cédula ya corresponde al administrador principal", "err");
+      return;
+    }
+
+    try {
+      await api("/usuarios", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          username,
+          password,
+          rol: "coordinador",
+          medico_id: null,
+          cedula,
+          nombre,
+        }),
+      });
+
+      await cargarUsuarios();
+      setAdminForm(ADMIN_FORM0);
+      showToast("Administrador creado correctamente ✓");
+    } catch (error) {
+      console.error(error);
+      showToast(error.message || "No se pudo crear el administrador", "err");
     }
   }
 
@@ -787,6 +918,7 @@ export default function App() {
       });
 
       const nuevaTarifa = Number(data?.tarifaHora) || valor;
+
       setTarifaHora(nuevaTarifa);
       setTarifaHoraInput(String(nuevaTarifa));
       showToast("Tarifa por hora actualizada ✓");
@@ -856,8 +988,11 @@ export default function App() {
         const key = `${medicoId}_${fecha}`;
         const next = { ...prev };
         const lista = next[key] ? [...next[key]] : [];
+
         if (!lista.includes(tipoTurno)) lista.push(tipoTurno);
+
         next[key] = turnosDiaOrdenados(lista);
+
         return next;
       });
 
@@ -884,8 +1019,10 @@ export default function App() {
         const key = `${medicoId}_${fecha}`;
         const next = { ...prev };
         const lista = (next[key] || []).filter((t) => t !== tipoTurno);
+
         if (lista.length === 0) delete next[key];
         else next[key] = lista;
+
         return next;
       });
 
@@ -905,11 +1042,15 @@ export default function App() {
           <div style={{ fontSize: 52, marginBottom: 12 }}>🏥</div>
           <div style={S.appTitle}>TurnosMed</div>
           <div style={S.appSub}>Sistema de Coordinación Hospitalaria</div>
+          <div style={S.creatorText}>
+            Creado por Fernando Rodriguez Bayona. Clinica Fundacion Valle de lili
+          </div>
         </div>
 
         <div style={S.loginCard}>
           <div style={S.loginTabs}>
             <button
+              type="button"
               onClick={() => {
                 setLoginMode("admin");
                 setLoginErr("");
@@ -920,6 +1061,7 @@ export default function App() {
             </button>
 
             <button
+              type="button"
               onClick={() => {
                 setLoginMode("usuario");
                 setLoginErr("");
@@ -934,7 +1076,7 @@ export default function App() {
             <>
               <div style={S.loginIcon}>🛡️</div>
               <div style={S.loginTitle}>Ingreso administrador</div>
-              <div style={S.loginSub}>Ingrese solo con la cédula autorizada</div>
+              <div style={S.loginSub}>Ingrese cédula y contraseña de administrador</div>
 
               <label style={S.lbl}>Cédula del administrador</label>
               <input
@@ -944,13 +1086,34 @@ export default function App() {
                   setAdminCedula(e.target.value);
                   setLoginErr("");
                 }}
-                onKeyDown={(e) => e.key === "Enter" && loginAdministradorCedula()}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") loginAdministradorCredenciales();
+                }}
                 placeholder="Cédula"
+              />
+
+              <label style={S.lbl}>Contraseña del administrador</label>
+              <input
+                type="password"
+                style={{ ...inputStyle(!!loginErr), marginTop: 6, marginBottom: 12 }}
+                value={adminPassword}
+                onChange={(e) => {
+                  setAdminPassword(e.target.value);
+                  setLoginErr("");
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") loginAdministradorCredenciales();
+                }}
+                placeholder="Contraseña"
               />
 
               {loginErr && <div style={S.errText}>{loginErr}</div>}
 
-              <button onClick={loginAdministradorCedula} style={S.loginBtn}>
+              <button
+                type="button"
+                onClick={loginAdministradorCredenciales}
+                style={S.loginBtn}
+              >
                 Entrar como administrador →
               </button>
             </>
@@ -968,7 +1131,9 @@ export default function App() {
                   setLoginUser(e.target.value);
                   setLoginErr("");
                 }}
-                onKeyDown={(e) => e.key === "Enter" && loginUsuarioNormal()}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") loginUsuarioNormal();
+                }}
                 placeholder="Usuario"
               />
 
@@ -981,13 +1146,15 @@ export default function App() {
                   setLoginPass(e.target.value);
                   setLoginErr("");
                 }}
-                onKeyDown={(e) => e.key === "Enter" && loginUsuarioNormal()}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") loginUsuarioNormal();
+                }}
                 placeholder="Contraseña"
               />
 
               {loginErr && <div style={S.errText}>{loginErr}</div>}
 
-              <button onClick={loginUsuarioNormal} style={S.loginBtn}>
+              <button type="button" onClick={loginUsuarioNormal} style={S.loginBtn}>
                 Ingresar →
               </button>
             </>
@@ -1002,11 +1169,13 @@ export default function App() {
       return (
         <div style={S.pageCenter}>
           <Toast toast={toast} />
+
           <div style={S.cardRestrict}>
             <div style={{ fontSize: 42, marginBottom: 12 }}>🔒</div>
             <div style={S.restrictTitle}>Sesión médica no válida</div>
             <div style={S.restrictText}>Vuelva a ingresar con usuario y contraseña.</div>
-            <button onClick={logout} style={S.primaryButton}>
+
+            <button type="button" onClick={logout} style={S.primaryButton}>
               Volver al inicio
             </button>
           </div>
@@ -1032,13 +1201,14 @@ export default function App() {
               <div style={S.headerName}>
                 {medicoActivo?.nombre} {medicoActivo?.apellido}
               </div>
+
               <div style={S.headerSub}>
                 {medicoActivo?.especialidad} · {medicoActivo?.cargo}
               </div>
             </div>
           </div>
 
-          <button onClick={logout} style={S.logoutBtn}>
+          <button type="button" onClick={logout} style={S.logoutBtn}>
             Cerrar sesión
           </button>
         </div>
@@ -1051,6 +1221,7 @@ export default function App() {
 
           <div style={S.monthSelector}>
             <button
+              type="button"
               onClick={() => navMes(-1, setPropYear, setPropMes, propYear, propMes)}
               style={S.bnav}
             >
@@ -1060,6 +1231,7 @@ export default function App() {
             <span style={S.monthTitle}>{capFirst(mesLabel(propYear, propMes))}</span>
 
             <button
+              type="button"
               onClick={() => navMes(1, setPropYear, setPropMes, propYear, propMes)}
               style={S.bnav}
             >
@@ -1076,6 +1248,7 @@ export default function App() {
                 {v.emoji} {v.label} {v.horas}h
               </span>
             ))}
+
             <span style={{ ...S.chip, background: "#1f2937", color: "#f1f5f9" }}>
               ➕ Horas adicionales
             </span>
@@ -1133,7 +1306,12 @@ export default function App() {
             <div style={S.restrictText}>
               El registro de médicos solo puede ser gestionado por el administrador.
             </div>
-            <button onClick={() => setPantalla(PANTALLAS.SELECTOR)} style={S.primaryButton}>
+
+            <button
+              type="button"
+              onClick={() => setPantalla(PANTALLAS.SELECTOR)}
+              style={S.primaryButton}
+            >
               Volver al inicio
             </button>
           </div>
@@ -1153,7 +1331,12 @@ export default function App() {
               <span style={S.badgeBlue}>
                 {medicos.length} médico{medicos.length !== 1 ? "s" : ""}
               </span>
-              <button onClick={() => setPantalla(PANTALLAS.COORD)} style={S.primaryButton}>
+
+              <button
+                type="button"
+                onClick={() => setPantalla(PANTALLAS.COORD)}
+                style={S.primaryButton}
+              >
                 Volver al panel
               </button>
             </div>
@@ -1182,11 +1365,13 @@ export default function App() {
     return (
       <div style={S.pageCenter}>
         <Toast toast={toast} />
+
         <div style={S.cardRestrict}>
           <div style={{ fontSize: 42, marginBottom: 12 }}>🔒</div>
           <div style={S.restrictTitle}>Acceso restringido</div>
           <div style={S.restrictText}>Debe ingresar como administrador.</div>
-          <button onClick={logout} style={S.primaryButton}>
+
+          <button type="button" onClick={logout} style={S.primaryButton}>
             Volver al inicio
           </button>
         </div>
@@ -1211,7 +1396,7 @@ export default function App() {
           {[
             { key: VIEWS_COORD.HOY, icon: "📋", label: "Hoy" },
             { key: VIEWS_COORD.CALENDARIO, icon: "📅", label: "Calendario" },
-            { key: VIEWS_COORD.MEDICOS, icon: "👨‍⚕️", label: "Médicos" },
+            { key: VIEWS_COORD.MEDICOS, icon: "👨‍⚕️", label: "Médicos y usuarios" },
             {
               key: VIEWS_COORD.HORARIOS,
               icon: "📬",
@@ -1220,6 +1405,7 @@ export default function App() {
             },
           ].map((item) => (
             <button
+              type="button"
               key={item.key}
               onClick={() => setView(item.key)}
               style={S.sideBtn(view === item.key)}
@@ -1232,11 +1418,15 @@ export default function App() {
         </nav>
 
         <div style={S.sidebarBottom}>
-          <button onClick={logout} style={S.sideLogout}>
+          <button type="button" onClick={logout} style={S.sideLogout}>
             ← Cerrar sesión
           </button>
 
-          <button onClick={() => setPantalla(PANTALLAS.REGISTRO)} style={S.sideSecondary}>
+          <button
+            type="button"
+            onClick={() => setPantalla(PANTALLAS.REGISTRO)}
+            style={S.sideSecondary}
+          >
             ⚙️ Gestionar médicos
           </button>
 
@@ -1265,7 +1455,7 @@ export default function App() {
               style={{ ...inputStyle(false), width: 180 }}
             />
 
-            <button onClick={guardarTarifaHora} style={S.primaryButton}>
+            <button type="button" onClick={guardarTarifaHora} style={S.primaryButton}>
               Guardar tarifa
             </button>
           </div>
@@ -1304,9 +1494,12 @@ export default function App() {
             usuarios={usuarios}
             userForm={userForm}
             setUserForm={setUserForm}
+            adminForm={adminForm}
+            setAdminForm={setAdminForm}
             resetPassForm={resetPassForm}
             setResetPassForm={setResetPassForm}
             crearUsuarioMedico={crearUsuarioMedico}
+            crearAdministrador={crearAdministrador}
             resetearPasswordUsuario={resetearPasswordUsuario}
             getUsuarioMedico={getUsuarioMedico}
             horasMes={horasMes}
@@ -1375,6 +1568,7 @@ function HeaderSimple({ title, subtitle, right }) {
         <div style={S.simpleTitle}>{title}</div>
         <div style={S.simpleSub}>{subtitle}</div>
       </div>
+
       {right}
     </header>
   );
@@ -1394,6 +1588,7 @@ function FieldSelect({ label, value, onChange, options }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
       <label style={S.lbl}>{label}</label>
+
       <select value={value} onChange={onChange} style={inputStyle(false)}>
         {options.map((op) => (
           <option key={op.value} value={op.value}>
@@ -1409,6 +1604,7 @@ function FieldDate({ label, value, onChange }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
       <label style={S.lbl}>{label}</label>
+
       <input type="date" value={value} onChange={onChange} style={inputStyle(false)} />
     </div>
   );
@@ -1437,6 +1633,7 @@ function RegistroMedicos({
 
             {editId && (
               <button
+                type="button"
                 onClick={() => {
                   setForm0();
                   setEditId(null);
@@ -1496,6 +1693,7 @@ function RegistroMedicos({
               onChange={(e) => setForm((p) => ({ ...p, especialidad: e.target.value }))}
             >
               <option value="">— Seleccione —</option>
+
               {ESPECIALIDADES.map((e) => (
                 <option key={e}>{e}</option>
               ))}
@@ -1507,7 +1705,9 @@ function RegistroMedicos({
               <input
                 style={inputStyle(!!errores.registro_medico)}
                 value={form.registro_medico}
-                onChange={(e) => setForm((p) => ({ ...p, registro_medico: e.target.value }))}
+                onChange={(e) =>
+                  setForm((p) => ({ ...p, registro_medico: e.target.value }))
+                }
               />
             </Campo>
 
@@ -1557,7 +1757,7 @@ function RegistroMedicos({
             </Campo>
           </div>
 
-          <button onClick={guardarMedico} disabled={saving} style={S.saveBtn(saving)}>
+          <button type="button" onClick={guardarMedico} disabled={saving} style={S.saveBtn(saving)}>
             {saving ? "Guardando..." : editId ? "💾 Guardar cambios" : "✅ Registrar médico"}
           </button>
         </div>
@@ -1603,10 +1803,11 @@ function RegistroMedicos({
               </div>
 
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                <button onClick={() => abrirEditar(med)} style={S.bEdit}>
+                <button type="button" onClick={() => abrirEditar(med)} style={S.bEdit}>
                   ✏️
                 </button>
-                <button onClick={() => eliminarMedico(med.id)} style={S.bDel}>
+
+                <button type="button" onClick={() => eliminarMedico(med.id)} style={S.bDel}>
                   🗑️
                 </button>
               </div>
@@ -1685,11 +1886,13 @@ function VistaCalendario({
       <PageHeader title="Calendario" sub="Gestión mensual de turnos" />
 
       <div style={S.monthSelector}>
-        <button onClick={() => navMes(-1, setYear, setMonth, year, month)} style={S.bnav}>
+        <button type="button" onClick={() => navMes(-1, setYear, setMonth, year, month)} style={S.bnav}>
           ‹
         </button>
+
         <span style={S.monthTitle}>{capFirst(mesLabel(year, month))}</span>
-        <button onClick={() => navMes(1, setYear, setMonth, year, month)} style={S.bnav}>
+
+        <button type="button" onClick={() => navMes(1, setYear, setMonth, year, month)} style={S.bnav}>
           ›
         </button>
       </div>
@@ -1699,6 +1902,7 @@ function VistaCalendario({
           <thead>
             <tr>
               <th style={S.th}>Médico</th>
+
               {diasCoord.map((d) => (
                 <th key={isoDate(d)} style={S.th}>
                   {diaLabel(d)}
@@ -1716,6 +1920,7 @@ function VistaCalendario({
                       {med.nombre?.[0]}
                       {med.apellido?.[0]}
                     </Av>
+
                     <div>
                       <div style={S.medNameSmall}>
                         {med.nombre} {med.apellido}
@@ -1738,6 +1943,7 @@ function VistaCalendario({
 
                         {tipos.map((tipo) => (
                           <button
+                            type="button"
                             key={tipo}
                             onClick={() => eliminarTurnoCoord(med.id, f, tipo)}
                             style={S.turnoBtn(TIPOS_TURNO[tipo])}
@@ -1757,6 +1963,7 @@ function VistaCalendario({
                           style={S.miniSelect}
                         >
                           <option value="">+</option>
+
                           {Object.keys(TIPOS_TURNO).map((k) => (
                             <option key={k} value={k}>
                               {TIPOS_TURNO[k].label}
@@ -1765,6 +1972,7 @@ function VistaCalendario({
                         </select>
 
                         {extra > 0 && <span style={S.extraMini}>+{extra}h</span>}
+
                         <span style={S.metaTiny}>{total}h</span>
                       </div>
                     </td>
@@ -1784,9 +1992,12 @@ function VistaMedicos({
   usuarios,
   userForm,
   setUserForm,
+  adminForm,
+  setAdminForm,
   resetPassForm,
   setResetPassForm,
   crearUsuarioMedico,
+  crearAdministrador,
   resetearPasswordUsuario,
   getUsuarioMedico,
   horasMes,
@@ -1798,17 +2009,98 @@ function VistaMedicos({
   setExtraForm,
   guardarHorasAdicionales,
 }) {
+  const administradores = usuarios.filter(
+    (u) => u.rol === "coordinador" || u.rol === "administrador"
+  );
+
   return (
     <section>
       <PageHeader
-        title="Médicos"
-        sub="Usuarios, accesos, horas adicionales y resumen mensual"
+        title="Médicos y usuarios"
+        sub="Usuarios, accesos, administradores, horas adicionales y resumen mensual"
         action={
-          <button onClick={() => setPantalla(PANTALLAS.REGISTRO)} style={S.primaryButton}>
+          <button type="button" onClick={() => setPantalla(PANTALLAS.REGISTRO)} style={S.primaryButton}>
             Gestionar médicos
           </button>
         }
       />
+
+      <div style={S.card}>
+        <div style={S.secTitle}>Crear otro administrador</div>
+
+        <div style={S.grid4}>
+          <Campo label="Nombre administrador">
+            <input
+              value={adminForm.nombre}
+              onChange={(e) => setAdminForm((p) => ({ ...p, nombre: e.target.value }))}
+              style={inputStyle(false)}
+              placeholder="Nombre"
+            />
+          </Campo>
+
+          <Campo label="Cédula">
+            <input
+              value={adminForm.cedula}
+              onChange={(e) =>
+                setAdminForm((p) => ({
+                  ...p,
+                  cedula: e.target.value,
+                  username: e.target.value,
+                }))
+              }
+              style={inputStyle(false)}
+              placeholder="Cédula"
+            />
+          </Campo>
+
+          <Campo label="Usuario">
+            <input
+              value={adminForm.username}
+              onChange={(e) => setAdminForm((p) => ({ ...p, username: e.target.value }))}
+              style={inputStyle(false)}
+              placeholder="Puede ser la misma cédula"
+            />
+          </Campo>
+
+          <Campo label="Contraseña">
+            <input
+              type="text"
+              value={adminForm.password}
+              onChange={(e) => setAdminForm((p) => ({ ...p, password: e.target.value }))}
+              style={inputStyle(false)}
+              placeholder="Contraseña"
+            />
+          </Campo>
+        </div>
+
+        <button
+          type="button"
+          onClick={crearAdministrador}
+          style={{ ...S.primaryButton, marginTop: 12 }}
+        >
+          Crear administrador
+        </button>
+
+        <div style={{ marginTop: 18 }}>
+          <div style={S.miniTitle}>Administradores registrados</div>
+
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            <div style={S.adminRow}>
+              <span>Fernando Rodriguez Bayona</span>
+              <span>Cédula {ADMIN_CEDULA_FIJA}</span>
+              <span>Administrador principal fijo</span>
+            </div>
+
+            {administradores.map((u) => (
+              <div key={u.id} style={S.adminRow}>
+                <span>{u.username}</span>
+                <span>Cédula {u.cedula || "sin cédula"}</span>
+                <span>{u.rol}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
 
       <div style={S.card}>
         <div style={S.secTitle}>Crear acceso para médico</div>
@@ -1820,6 +2112,7 @@ function VistaMedicos({
             onChange={(e) => {
               const medico_id = e.target.value;
               const medico = medicos.find((m) => Number(m.id) === Number(medico_id));
+
               setUserForm((p) => ({
                 ...p,
                 medico_id,
@@ -1855,7 +2148,7 @@ function VistaMedicos({
           </Campo>
         </div>
 
-        <button onClick={crearUsuarioMedico} style={{ ...S.primaryButton, marginTop: 12 }}>
+        <button type="button" onClick={crearUsuarioMedico} style={{ ...S.primaryButton, marginTop: 12 }}>
           Crear acceso
         </button>
       </div>
@@ -1876,6 +2169,7 @@ function VistaMedicos({
                 .filter((u) => u.rol === "medico")
                 .map((u) => {
                   const medico = medicos.find((m) => Number(m.id) === Number(u.medico_id));
+
                   return {
                     value: u.id,
                     label: medico
@@ -1898,7 +2192,7 @@ function VistaMedicos({
           </Campo>
 
           <div style={{ display: "flex", alignItems: "end" }}>
-            <button onClick={resetearPasswordUsuario} style={S.primaryButton}>
+            <button type="button" onClick={resetearPasswordUsuario} style={S.primaryButton}>
               Cambiar contraseña
             </button>
           </div>
@@ -1947,7 +2241,11 @@ function VistaMedicos({
           </Campo>
         </div>
 
-        <button onClick={guardarHorasAdicionales} style={{ ...S.primaryButton, marginTop: 12 }}>
+        <button
+          type="button"
+          onClick={guardarHorasAdicionales}
+          style={{ ...S.primaryButton, marginTop: 12 }}
+        >
           Guardar horas
         </button>
       </div>
@@ -1970,6 +2268,7 @@ function VistaMedicos({
                   <div style={S.medName}>
                     {med.nombre} {med.apellido}
                   </div>
+
                   <div style={S.metaText}>{med.especialidad}</div>
                 </div>
               </div>
@@ -2015,6 +2314,7 @@ function VistaSolicitudes({
             const medicoSolicitante = medicos.find(
               (m) => Number(m.id) === Number(sol.medico_solicitante_id)
             );
+
             const color = getEstadoColor(sol.estado);
 
             return (
@@ -2026,6 +2326,7 @@ function VistaSolicitudes({
                         ? `${medicoSolicitante.nombre} ${medicoSolicitante.apellido}`
                         : "Médico"}
                     </div>
+
                     <div style={S.reqSub}>
                       Estado: {sol.estado} · Fecha solicitud: {sol.fecha_solicitud || "N/A"}
                     </div>
@@ -2062,6 +2363,7 @@ function PageHeader({ title, sub, action }) {
         <h1 style={S.pageTitle}>{title}</h1>
         <p style={S.pageSubtitle}>{sub}</p>
       </div>
+
       {action}
     </div>
   );
@@ -2104,6 +2406,13 @@ const S = {
     fontSize: 14,
     color: "#64748b",
     marginTop: 6,
+  },
+
+  creatorText: {
+    marginTop: 10,
+    color: "#94a3b8",
+    fontSize: 12,
+    fontWeight: 700,
   },
 
   loginCard: {
@@ -2578,6 +2887,26 @@ const S = {
     fontSize: 15,
     fontWeight: 900,
     marginBottom: 14,
+  },
+
+  miniTitle: {
+    color: "#94a3b8",
+    fontSize: 12,
+    fontWeight: 900,
+    marginBottom: 8,
+  },
+
+  adminRow: {
+    background: "#111827",
+    border: "1px solid #1f2937",
+    borderRadius: 10,
+    padding: "9px 11px",
+    color: "#cbd5e1",
+    fontSize: 12,
+    display: "flex",
+    justifyContent: "space-between",
+    gap: 10,
+    flexWrap: "wrap",
   },
 
   infoRows: {

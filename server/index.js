@@ -9,10 +9,15 @@ app.use(cors());
 app.use(express.json());
 
 const PORT = process.env.PORT || 3001;
-const ADMIN_CEDULA = process.env.ADMIN_CEDULA || "6662672";
 
-const dbPath = path.join(__dirname, "database.sqlite");
+const ADMIN_CEDULA = process.env.ADMIN_CEDULA || "6662672";
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "6662672";
+const ADMIN_NOMBRE = "Fernando Rodriguez Bayona";
+
+const dbPath = process.env.DB_PATH || path.join(__dirname, "database.sqlite");
 const db = new sqlite3.Database(dbPath);
+
+db.run("PRAGMA foreign_keys = ON");
 
 function run(sql, params = []) {
   return new Promise((resolve, reject) => {
@@ -41,6 +46,20 @@ function all(sql, params = []) {
   });
 }
 
+async function columnExists(tableName, columnName) {
+  const columns = await all(`PRAGMA table_info(${tableName})`);
+  return columns.some((col) => col.name === columnName);
+}
+
+async function ensureColumn(tableName, columnName, definition) {
+  const exists = await columnExists(tableName, columnName);
+
+  if (!exists) {
+    await run(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}`);
+    console.log(`Columna agregada: ${tableName}.${columnName}`);
+  }
+}
+
 async function inicializarBaseDatos() {
   await run(`
     CREATE TABLE IF NOT EXISTS medicos (
@@ -62,6 +81,7 @@ async function inicializarBaseDatos() {
   await run(`
     CREATE TABLE IF NOT EXISTS usuarios (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
+      nombre TEXT,
       username TEXT UNIQUE NOT NULL,
       password TEXT,
       rol TEXT NOT NULL,
@@ -71,6 +91,10 @@ async function inicializarBaseDatos() {
       FOREIGN KEY (medico_id) REFERENCES medicos(id) ON DELETE CASCADE
     )
   `);
+
+  await ensureColumn("usuarios", "nombre", "TEXT");
+  await ensureColumn("usuarios", "cedula", "TEXT");
+  await ensureColumn("usuarios", "activo", "INTEGER DEFAULT 1");
 
   await run(`
     CREATE TABLE IF NOT EXISTS turnos (
@@ -143,28 +167,84 @@ async function inicializarBaseDatos() {
     )
   `);
 
-  const admin = await get(
-    "SELECT * FROM usuarios WHERE rol IN ('coordinador', 'administrador') LIMIT 1"
+  const adminPorCedula = await get(
+    `
+    SELECT *
+    FROM usuarios
+    WHERE cedula = ?
+    AND rol IN ('coordinador', 'administrador')
+    LIMIT 1
+    `,
+    [ADMIN_CEDULA]
   );
 
-  if (!admin) {
+  if (adminPorCedula) {
     await run(
       `
-      INSERT INTO usuarios 
-      (username, password, rol, medico_id, cedula, activo)
-      VALUES (?, ?, ?, ?, ?, ?)
+      UPDATE usuarios
+      SET 
+        nombre = ?,
+        username = ?,
+        password = ?,
+        rol = 'coordinador',
+        medico_id = NULL,
+        cedula = ?,
+        activo = 1
+      WHERE id = ?
       `,
-      ["admin", "", "coordinador", null, ADMIN_CEDULA, 1]
+      [ADMIN_NOMBRE, "admin", ADMIN_PASSWORD, ADMIN_CEDULA, adminPorCedula.id]
     );
 
-    console.log("Administrador creado con cédula:", ADMIN_CEDULA);
-  } else if (!admin.cedula) {
-    await run(
-      "UPDATE usuarios SET cedula = ? WHERE id = ?",
-      [ADMIN_CEDULA, admin.id]
+    console.log("Administrador principal actualizado:", ADMIN_CEDULA);
+  } else {
+    const adminViejo = await get(
+      `
+      SELECT *
+      FROM usuarios
+      WHERE rol IN ('coordinador', 'administrador')
+      ORDER BY id ASC
+      LIMIT 1
+      `
     );
 
-    console.log("Cédula agregada al administrador existente:", ADMIN_CEDULA);
+    if (adminViejo) {
+      await run(
+        `
+        UPDATE usuarios
+        SET 
+          nombre = ?,
+          username = ?,
+          password = ?,
+          rol = 'coordinador',
+          medico_id = NULL,
+          cedula = ?,
+          activo = 1
+        WHERE id = ?
+        `,
+        [ADMIN_NOMBRE, "admin", ADMIN_PASSWORD, ADMIN_CEDULA, adminViejo.id]
+      );
+
+      console.log("Administrador existente convertido en principal:", ADMIN_CEDULA);
+    } else {
+      await run(
+        `
+        INSERT INTO usuarios
+        (
+          nombre,
+          username,
+          password,
+          rol,
+          medico_id,
+          cedula,
+          activo
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        `,
+        [ADMIN_NOMBRE, "admin", ADMIN_PASSWORD, "coordinador", null, ADMIN_CEDULA, 1]
+      );
+
+      console.log("Administrador principal creado:", ADMIN_CEDULA);
+    }
   }
 
   const tarifa = await get(
@@ -201,6 +281,56 @@ app.get("/health", (req, res) => {
    LOGIN
 ============================================================================ */
 
+app.post("/login-admin", async (req, res) => {
+  try {
+    const { cedula, password } = req.body;
+
+    if (!cedula || !password) {
+      return res.status(400).json({
+        error: "Debe ingresar cédula y contraseña del administrador",
+      });
+    }
+
+    const usuario = await get(
+      `
+      SELECT 
+        id,
+        nombre,
+        username,
+        rol,
+        medico_id,
+        cedula,
+        activo
+      FROM usuarios
+      WHERE cedula = ?
+      AND password = ?
+      AND rol IN ('coordinador', 'administrador')
+      AND activo = 1
+      LIMIT 1
+      `,
+      [String(cedula).trim(), String(password).trim()]
+    );
+
+    if (!usuario) {
+      return res.status(401).json({
+        error: "Cédula o contraseña de administrador incorrecta",
+      });
+    }
+
+    res.json({
+      usuario: {
+        ...usuario,
+        rol: "coordinador",
+      },
+    });
+  } catch (error) {
+    console.error("Error en /login-admin:", error);
+    res.status(500).json({
+      error: "Error interno del servidor",
+    });
+  }
+});
+
 app.post("/login-admin-cedula", async (req, res) => {
   try {
     const { cedula } = req.body;
@@ -213,7 +343,14 @@ app.post("/login-admin-cedula", async (req, res) => {
 
     const usuario = await get(
       `
-      SELECT id, username, rol, medico_id, cedula, activo
+      SELECT 
+        id,
+        nombre,
+        username,
+        rol,
+        medico_id,
+        cedula,
+        activo
       FROM usuarios
       WHERE cedula = ?
       AND rol IN ('coordinador', 'administrador')
@@ -255,14 +392,21 @@ app.post("/login", async (req, res) => {
 
     const usuario = await get(
       `
-      SELECT id, username, rol, medico_id, cedula, activo
+      SELECT 
+        id,
+        nombre,
+        username,
+        rol,
+        medico_id,
+        cedula,
+        activo
       FROM usuarios
       WHERE username = ?
       AND password = ?
       AND activo = 1
       LIMIT 1
       `,
-      [String(username).trim(), String(password)]
+      [String(username).trim(), String(password).trim()]
     );
 
     if (!usuario) {
@@ -273,7 +417,7 @@ app.post("/login", async (req, res) => {
 
     if (usuario.rol === "coordinador" || usuario.rol === "administrador") {
       return res.status(403).json({
-        error: "El administrador debe ingresar solo con cédula",
+        error: "El administrador debe ingresar por la pestaña Administrador",
       });
     }
 
@@ -418,7 +562,7 @@ app.put("/medicos/:id", async (req, res) => {
 
     const docRepetido = await get(
       "SELECT id FROM medicos WHERE documento = ? AND id != ?",
-      [String(documento).trim(), id]
+      [String(documento || "").trim(), id]
     );
 
     if (docRepetido) {
@@ -501,7 +645,7 @@ app.delete("/medicos/:id", async (req, res) => {
 });
 
 /* ============================================================================
-   USUARIOS
+   USUARIOS Y ADMINISTRADORES
 ============================================================================ */
 
 app.get("/usuarios", async (req, res) => {
@@ -510,6 +654,7 @@ app.get("/usuarios", async (req, res) => {
       `
       SELECT 
         id,
+        nombre,
         username,
         rol,
         medico_id,
@@ -531,32 +676,64 @@ app.get("/usuarios", async (req, res) => {
 
 app.post("/usuarios", async (req, res) => {
   try {
-    const { username, password, rol, medico_id, cedula } = req.body;
+    const {
+      nombre,
+      username,
+      password,
+      rol,
+      medico_id,
+      cedula,
+    } = req.body;
 
-    if (!username || !rol) {
+    const usernameFinal = String(username || "").trim();
+    const passwordFinal = String(password || "").trim();
+    const rolFinal = String(rol || "").trim();
+    const cedulaFinal = cedula ? String(cedula).trim() : null;
+    const nombreFinal = nombre ? String(nombre).trim() : "";
+
+    if (!usernameFinal || !rolFinal) {
       return res.status(400).json({
         error: "Usuario y rol son obligatorios",
       });
     }
 
-    if (rol !== "coordinador" && rol !== "administrador" && !password) {
+    if (!["medico", "coordinador", "administrador"].includes(rolFinal)) {
       return res.status(400).json({
-        error: "La contraseña es obligatoria para usuarios médicos",
+        error: "Rol no válido",
       });
     }
 
-    const existe = await get(
+    if (!passwordFinal) {
+      return res.status(400).json({
+        error: "La contraseña es obligatoria",
+      });
+    }
+
+    const existeUsername = await get(
       "SELECT id FROM usuarios WHERE username = ?",
-      [String(username).trim()]
+      [usernameFinal]
     );
 
-    if (existe) {
+    if (existeUsername) {
       return res.status(409).json({
         error: "Ya existe un usuario con ese nombre",
       });
     }
 
-    if (rol === "medico") {
+    if (cedulaFinal) {
+      const existeCedula = await get(
+        "SELECT id FROM usuarios WHERE cedula = ?",
+        [cedulaFinal]
+      );
+
+      if (existeCedula) {
+        return res.status(409).json({
+          error: "Ya existe un usuario con esa cédula",
+        });
+      }
+    }
+
+    if (rolFinal === "medico") {
       if (!medico_id) {
         return res.status(400).json({
           error: "Debe seleccionar el médico vinculado",
@@ -585,10 +762,19 @@ app.post("/usuarios", async (req, res) => {
       }
     }
 
+    if (rolFinal === "coordinador" || rolFinal === "administrador") {
+      if (!cedulaFinal) {
+        return res.status(400).json({
+          error: "La cédula es obligatoria para administradores",
+        });
+      }
+    }
+
     const result = await run(
       `
       INSERT INTO usuarios
       (
+        nombre,
         username,
         password,
         rol,
@@ -596,21 +782,29 @@ app.post("/usuarios", async (req, res) => {
         cedula,
         activo
       )
-      VALUES (?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
       `,
       [
-        String(username).trim(),
-        password ? String(password) : "",
-        rol,
-        medico_id || null,
-        cedula || null,
+        nombreFinal,
+        usernameFinal,
+        passwordFinal,
+        rolFinal,
+        rolFinal === "medico" ? medico_id : null,
+        cedulaFinal,
         1,
       ]
     );
 
     const nuevo = await get(
       `
-      SELECT id, username, rol, medico_id, cedula, activo
+      SELECT 
+        id,
+        nombre,
+        username,
+        rol,
+        medico_id,
+        cedula,
+        activo
       FROM usuarios
       WHERE id = ?
       `,
@@ -645,9 +839,9 @@ app.put("/usuarios/:id/reset-password", async (req, res) => {
       });
     }
 
-    if (usuario.rol === "coordinador" || usuario.rol === "administrador") {
+    if (String(usuario.cedula) === String(ADMIN_CEDULA)) {
       return res.status(403).json({
-        error: "El administrador no usa contraseña",
+        error: "No se puede cambiar la contraseña del administrador principal",
       });
     }
 
@@ -1444,6 +1638,7 @@ inicializarBaseDatos()
     app.listen(PORT, () => {
       console.log(`Servidor corriendo en puerto ${PORT}`);
       console.log(`Base de datos: ${dbPath}`);
+      console.log(`Administrador principal: ${ADMIN_CEDULA}`);
     });
   })
   .catch((error) => {
