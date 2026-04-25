@@ -1,15 +1,26 @@
-const express = require("express");
+﻿const express = require("express");
 const cors = require("cors");
 const sqlite3 = require("sqlite3").verbose();
 const path = require("path");
+const crypto = require("crypto");
 
 const app = express();
 
 const PORT = process.env.PORT || 3001;
 const DB_PATH = process.env.DB_PATH || path.join(__dirname, "database.sqlite");
 
-const ADMIN_CEDULA_FIJA = "6662672";
-const ADMIN_PASSWORD_FIJA = "6662672";
+const ADMIN_CEDULA_FIJA = process.env.ADMIN_CEDULA_FIJA || "6662672";
+const ADMIN_PASSWORD_FIJA = process.env.ADMIN_PASSWORD_FIJA || "6662672";
+const AUTH_SECRET =
+  process.env.AUTH_SECRET || crypto.createHash("sha256").update(`${DB_PATH}:turnosmed`).digest("hex");
+
+const TORRES_PISOS = {
+  "Torre 2": ["6t2", "8t2", "9t2", "10t2", "11t2"],
+  "Torre 3": ["4t3", "5t3", "6t3", "7t3", "8t3", "9t3"],
+  "Torre 4": ["7t4"],
+};
+
+const TIPOS_TURNO_VALIDOS = ["DIA", "CENIZO", "FDS"];
 
 app.use(
   cors({
@@ -53,7 +64,7 @@ function get(sql, params = []) {
       if (err) {
         reject(err);
       } else {
-        resolve(row);
+        resolve(row || null);
       }
     });
   });
@@ -80,6 +91,14 @@ async function ensureColumn(table, column, definition) {
   }
 }
 
+async function ensureIndex(name, sql) {
+  try {
+    await run(`CREATE INDEX IF NOT EXISTS ${name} ${sql}`);
+  } catch (error) {
+    console.error(`No se pudo crear Ã­ndice ${name}:`, error.message);
+  }
+}
+
 function ok(res, data) {
   return res.json(data);
 }
@@ -88,12 +107,157 @@ function fail(res, error, status = 500) {
   console.error(error);
 
   return res.status(status).json({
-    error: error?.message || "Ocurrió un error con el servidor",
+    error: error?.message || "OcurriÃ³ un error con el servidor",
   });
 }
 
 function cleanText(value) {
-  return String(value || "").trim();
+  return String(value ?? "").trim();
+}
+
+function toNull(value) {
+  const v = cleanText(value);
+  return v ? v : null;
+}
+
+function fechaActualSql() {
+  return new Date().toISOString();
+}
+
+function base64url(input) {
+  return Buffer.from(input)
+    .toString("base64")
+    .replace(/=/g, "")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_");
+}
+
+function signToken(payload) {
+  const header = base64url(JSON.stringify({ alg: "HS256", typ: "JWT" }));
+  const body = base64url(
+    JSON.stringify({
+      ...payload,
+      iat: Math.floor(Date.now() / 1000),
+    })
+  );
+  const signature = crypto
+    .createHmac("sha256", AUTH_SECRET)
+    .update(`${header}.${body}`)
+    .digest("base64")
+    .replace(/=/g, "")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_");
+
+  return `${header}.${body}.${signature}`;
+}
+
+function verifyToken(token) {
+  const parts = String(token || "").split(".");
+  if (parts.length !== 3) return null;
+
+  const [header, body, signature] = parts;
+  const expected = crypto
+    .createHmac("sha256", AUTH_SECRET)
+    .update(`${header}.${body}`)
+    .digest("base64")
+    .replace(/=/g, "")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_");
+
+  const received = Buffer.from(signature);
+  const valid = Buffer.from(expected);
+
+  if (received.length !== valid.length || !crypto.timingSafeEqual(received, valid)) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(Buffer.from(body, "base64url").toString("utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function hashPassword(password) {
+  const salt = crypto.randomBytes(16).toString("hex");
+  const hash = crypto.pbkdf2Sync(String(password), salt, 120000, 32, "sha256").toString("hex");
+  return `pbkdf2$${salt}$${hash}`;
+}
+
+function passwordMatches(storedPassword, plainPassword) {
+  const stored = String(storedPassword || "");
+  const plain = String(plainPassword || "");
+
+  if (stored.startsWith("pbkdf2$")) {
+    const [, salt, hash] = stored.split("$");
+    if (!salt || !hash) return false;
+
+    const candidate = crypto.pbkdf2Sync(plain, salt, 120000, 32, "sha256").toString("hex");
+    const a = Buffer.from(candidate);
+    const b = Buffer.from(hash);
+
+    return a.length === b.length && crypto.timingSafeEqual(a, b);
+  }
+
+  return stored === plain;
+}
+
+async function maybeUpgradePassword(usuario, plainPassword) {
+  if (!usuario?.id || String(usuario.password || "").startsWith("pbkdf2$")) {
+    return;
+  }
+
+  await run("UPDATE usuarios SET password = ? WHERE id = ?", [
+    hashPassword(plainPassword),
+    usuario.id,
+  ]);
+}
+
+function buildAuthResponse(usuario, medico = null, overrides = {}) {
+  const safeUser = {
+    ...publicUser(usuario),
+    ...overrides,
+  };
+
+  return {
+    usuario: safeUser,
+    medico,
+    token: signToken({
+      id: safeUser.id,
+      username: safeUser.username,
+      rol: normalizeRol(safeUser.rol),
+      medico_id: safeUser.medico_id || null,
+      cedula: safeUser.cedula || null,
+      admin_fijo: !!safeUser.admin_fijo,
+    }),
+  };
+}
+
+function requireAuth(req, res, next) {
+  const header = req.headers.authorization || "";
+  const token = header.startsWith("Bearer ") ? header.slice(7) : "";
+  const payload = verifyToken(token);
+
+  if (!payload) {
+    return fail(res, new Error("SesiÃ³n invÃ¡lida o vencida"), 401);
+  }
+
+  req.auth = payload;
+  return next();
+}
+
+function requireAdmin(req, res, next) {
+  requireAuth(req, res, () => {
+    if (!isAdminRol(req.auth?.rol)) {
+      return fail(res, new Error("No tienes permisos de coordinador"), 403);
+    }
+
+    return next();
+  });
+}
+
+function canManageMedico(req, medicoId) {
+  return isAdminRol(req.auth?.rol) || Number(req.auth?.medico_id) === Number(medicoId);
 }
 
 function normalizeRol(rol) {
@@ -103,7 +267,7 @@ function normalizeRol(rol) {
   if (r === "admin") return "coordinador";
   if (r === "coordinador") return "coordinador";
   if (r === "medico") return "medico";
-  if (r === "médico") return "medico";
+  if (r === "mÃ©dico") return "medico";
 
   return r || "medico";
 }
@@ -115,6 +279,15 @@ function normalizeEstado(estado) {
   if (e === "rechazado") return "rechazado";
 
   return "pendiente";
+}
+
+function isAdminRol(rol) {
+  const r = normalizeRol(rol);
+  return r === "coordinador";
+}
+
+function isTipoTurnoValido(tipo) {
+  return TIPOS_TURNO_VALIDOS.includes(cleanText(tipo));
 }
 
 function publicUser(row) {
@@ -129,11 +302,60 @@ function publicUser(row) {
     nombre: row.nombre,
     activo: row.activo,
     created_at: row.created_at,
+    es_admin: normalizeRol(row.rol) === "coordinador",
+    es_medico: !!row.medico_id || normalizeRol(row.rol) === "medico",
   };
 }
 
-function fechaActualSql() {
-  return new Date().toISOString();
+function medicoPayloadFromBody(body) {
+  return {
+    nombre: cleanText(body.nombre),
+    apellido: cleanText(body.apellido),
+    documento: cleanText(body.documento),
+    tipo_doc: cleanText(body.tipo_doc) || "CC",
+    especialidad: cleanText(body.especialidad),
+    registro_medico: cleanText(body.registro_medico),
+    telefono: cleanText(body.telefono),
+    email: cleanText(body.email),
+    fecha_ingreso: cleanText(body.fecha_ingreso),
+    cargo: cleanText(body.cargo),
+    color: cleanText(body.color) || "#4f8ef7",
+    torre_asignada: toNull(body.torre_asignada || body.torre || body.torre_encargada),
+    piso_asignado: toNull(body.piso_asignado || body.piso || body.piso_encargado),
+  };
+}
+
+function validarTorrePiso(torre, piso) {
+  if (!torre && !piso) {
+    return true;
+  }
+
+  if (!torre || !piso) {
+    return false;
+  }
+
+  if (!TORRES_PISOS[torre]) {
+    return false;
+  }
+
+  return TORRES_PISOS[torre].includes(piso);
+}
+
+async function buscarMedicoPorDocumento(documento) {
+  const doc = cleanText(documento);
+
+  if (!doc) return null;
+
+  return get(
+    `
+    SELECT *
+    FROM medicos
+    WHERE documento = ?
+      AND activo = 1
+    LIMIT 1
+    `,
+    [doc]
+  );
 }
 
 /* ============================================================================
@@ -156,6 +378,8 @@ async function initDB() {
       fecha_ingreso TEXT,
       cargo TEXT,
       color TEXT,
+      torre_asignada TEXT,
+      piso_asignado TEXT,
       activo INTEGER DEFAULT 1,
       created_at TEXT DEFAULT CURRENT_TIMESTAMP
     )
@@ -259,6 +483,8 @@ async function initDB() {
   await ensureColumn("medicos", "fecha_ingreso", "TEXT");
   await ensureColumn("medicos", "cargo", "TEXT");
   await ensureColumn("medicos", "color", "TEXT");
+  await ensureColumn("medicos", "torre_asignada", "TEXT");
+  await ensureColumn("medicos", "piso_asignado", "TEXT");
   await ensureColumn("medicos", "activo", "INTEGER DEFAULT 1");
   await ensureColumn("medicos", "created_at", "TEXT DEFAULT CURRENT_TIMESTAMP");
 
@@ -303,6 +529,46 @@ async function initDB() {
   );
   await ensureColumn("solicitudes_horario", "updated_at", "TEXT");
 
+  await ensureIndex(
+    "idx_medicos_documento",
+    "ON medicos(documento)"
+  );
+
+  await ensureIndex(
+    "idx_usuarios_username",
+    "ON usuarios(username)"
+  );
+
+  await ensureIndex(
+    "idx_usuarios_cedula",
+    "ON usuarios(cedula)"
+  );
+
+  await ensureIndex(
+    "idx_turnos_fecha",
+    "ON turnos(fecha)"
+  );
+
+  await ensureIndex(
+    "idx_turnos_medico_fecha",
+    "ON turnos(medico_id, fecha)"
+  );
+
+  await ensureIndex(
+    "idx_solicitudes_cambio_estado",
+    "ON solicitudes_cambio_turno(estado)"
+  );
+
+  await ensureIndex(
+    "idx_solicitudes_cesion_estado",
+    "ON solicitudes_cesion_turno(estado)"
+  );
+
+  await ensureIndex(
+    "idx_solicitudes_horario_estado",
+    "ON solicitudes_horario(estado)"
+  );
+
   const configTarifa = await get(
     "SELECT clave, valor FROM configuracion WHERE clave = ?",
     ["tarifa_hora"]
@@ -330,6 +596,7 @@ app.get("/", (req, res) => {
     ok: true,
     app: "TurnosMed Backend",
     status: "running",
+    version: "roles-admin-medico-torre-piso-solicitudes-hoy",
   });
 });
 
@@ -341,6 +608,10 @@ app.get("/health", (req, res) => {
   });
 });
 
+app.get("/torres-pisos", (req, res) => {
+  res.json(TORRES_PISOS);
+});
+
 /* ============================================================================
    LOGIN
 ============================================================================ */
@@ -350,7 +621,7 @@ app.post("/login", async (req, res) => {
     const password = cleanText(req.body.password);
 
     if (!username || !password) {
-      return fail(res, new Error("Usuario y contraseña son obligatorios"), 400);
+      return fail(res, new Error("Usuario y contraseÃ±a son obligatorios"), 400);
     }
 
     const usuario = await get(
@@ -363,13 +634,27 @@ app.post("/login", async (req, res) => {
       [username]
     );
 
-    if (!usuario || usuario.password !== password) {
-      return fail(res, new Error("Usuario o contraseña incorrectos"), 401);
+    if (!usuario || !passwordMatches(usuario.password, password)) {
+      return fail(res, new Error("Usuario o contraseÃ±a incorrectos"), 401);
     }
 
-    return ok(res, {
-      usuario: publicUser(usuario),
-    });
+    await maybeUpgradePassword(usuario, password);
+
+    let medico = null;
+
+    if (usuario.medico_id) {
+      medico = await get(
+        `
+        SELECT *
+        FROM medicos
+        WHERE id = ?
+          AND activo = 1
+        `,
+        [usuario.medico_id]
+      );
+    }
+
+    return ok(res, buildAuthResponse(usuario, medico));
   } catch (error) {
     return fail(res, error);
   }
@@ -381,22 +666,31 @@ app.post("/login-admin", async (req, res) => {
     const password = cleanText(req.body.password);
 
     if (!cedula || !password) {
-      return fail(res, new Error("Cédula y contraseña son obligatorias"), 400);
+      return fail(res, new Error("CÃ©dula y contraseÃ±a son obligatorias"), 400);
     }
 
     if (cedula === ADMIN_CEDULA_FIJA && password === ADMIN_PASSWORD_FIJA) {
-      return ok(res, {
-        usuario: {
-          id: 0,
-          username: "Fernando Rodriguez Bayona",
-          nombre: "Fernando Rodriguez Bayona",
-          rol: "coordinador",
-          medico_id: null,
-          cedula: ADMIN_CEDULA_FIJA,
-          activo: 1,
-          admin_fijo: true,
-        },
-      });
+      const medicoAdmin = await buscarMedicoPorDocumento(ADMIN_CEDULA_FIJA);
+
+      return ok(
+        res,
+        buildAuthResponse(
+          {
+            id: 0,
+            username: "Fernando Rodriguez Bayona",
+            nombre: "Fernando Rodriguez Bayona",
+            rol: "coordinador",
+            medico_id: medicoAdmin?.id || null,
+            cedula: ADMIN_CEDULA_FIJA,
+            activo: 1,
+            admin_fijo: true,
+            es_admin: true,
+            es_medico: !!medicoAdmin,
+          },
+          medicoAdmin || null,
+          { admin_fijo: true, es_admin: true, es_medico: !!medicoAdmin }
+        )
+      );
     }
 
     const usuario = await get(
@@ -410,68 +704,44 @@ app.post("/login-admin", async (req, res) => {
       [cedula, cedula]
     );
 
-    if (!usuario || usuario.password !== password) {
-      return fail(res, new Error("Administrador no válido"), 401);
+    if (!usuario || !passwordMatches(usuario.password, password)) {
+      return fail(res, new Error("Administrador no vÃ¡lido"), 401);
     }
 
-    return ok(res, {
-      usuario: {
-        ...publicUser(usuario),
+    await maybeUpgradePassword(usuario, password);
+
+    let medico = null;
+
+    if (usuario.medico_id) {
+      medico = await get(
+        `
+        SELECT *
+        FROM medicos
+        WHERE id = ?
+          AND activo = 1
+        `,
+        [usuario.medico_id]
+      );
+    } else if (usuario.cedula) {
+      medico = await buscarMedicoPorDocumento(usuario.cedula);
+    }
+
+    return ok(
+      res,
+      buildAuthResponse(usuario, medico, {
         rol: "coordinador",
-      },
-    });
+        medico_id: usuario.medico_id || medico?.id || null,
+        es_admin: true,
+        es_medico: !!(usuario.medico_id || medico?.id),
+      })
+    );
   } catch (error) {
     return fail(res, error);
   }
 });
 
 app.post("/login-admin-cedula", async (req, res) => {
-  try {
-    const cedula = cleanText(req.body.cedula);
-
-    if (!cedula) {
-      return fail(res, new Error("Cédula obligatoria"), 400);
-    }
-
-    if (cedula === ADMIN_CEDULA_FIJA) {
-      return ok(res, {
-        usuario: {
-          id: 0,
-          username: "Fernando Rodriguez Bayona",
-          nombre: "Fernando Rodriguez Bayona",
-          rol: "coordinador",
-          medico_id: null,
-          cedula: ADMIN_CEDULA_FIJA,
-          activo: 1,
-          admin_fijo: true,
-        },
-      });
-    }
-
-    const usuario = await get(
-      `
-      SELECT *
-      FROM usuarios
-      WHERE activo = 1
-        AND cedula = ?
-        AND (rol = 'coordinador' OR rol = 'administrador' OR rol = 'admin')
-      `,
-      [cedula]
-    );
-
-    if (!usuario) {
-      return fail(res, new Error("Administrador no válido"), 401);
-    }
-
-    return ok(res, {
-      usuario: {
-        ...publicUser(usuario),
-        rol: "coordinador",
-      },
-    });
-  } catch (error) {
-    return fail(res, error);
-  }
+  return fail(res, new Error("Usa el inicio de sesión de administrador con contraseña"), 405);
 });
 
 /* ============================================================================
@@ -494,24 +764,44 @@ app.get("/medicos", async (req, res) => {
   }
 });
 
-app.post("/medicos", async (req, res) => {
+app.get("/medicos/:id", async (req, res) => {
   try {
-    const payload = {
-      nombre: cleanText(req.body.nombre),
-      apellido: cleanText(req.body.apellido),
-      documento: cleanText(req.body.documento),
-      tipo_doc: cleanText(req.body.tipo_doc) || "CC",
-      especialidad: cleanText(req.body.especialidad),
-      registro_medico: cleanText(req.body.registro_medico),
-      telefono: cleanText(req.body.telefono),
-      email: cleanText(req.body.email),
-      fecha_ingreso: cleanText(req.body.fecha_ingreso),
-      cargo: cleanText(req.body.cargo),
-      color: cleanText(req.body.color) || "#4f8ef7",
-    };
+    const id = Number(req.params.id);
+
+    if (!id) {
+      return fail(res, new Error("ID invÃ¡lido"), 400);
+    }
+
+    const medico = await get(
+      `
+      SELECT *
+      FROM medicos
+      WHERE id = ?
+        AND activo = 1
+      `,
+      [id]
+    );
+
+    if (!medico) {
+      return fail(res, new Error("MÃ©dico no encontrado"), 404);
+    }
+
+    return ok(res, medico);
+  } catch (error) {
+    return fail(res, error);
+  }
+});
+
+app.post("/medicos", requireAdmin, async (req, res) => {
+  try {
+    const payload = medicoPayloadFromBody(req.body);
 
     if (!payload.nombre || !payload.apellido || !payload.documento) {
       return fail(res, new Error("Nombre, apellido y documento son obligatorios"), 400);
+    }
+
+    if (!validarTorrePiso(payload.torre_asignada, payload.piso_asignado)) {
+      return fail(res, new Error("La torre y el piso asignado no son vÃ¡lidos"), 400);
     }
 
     const result = await run(
@@ -528,9 +818,11 @@ app.post("/medicos", async (req, res) => {
         fecha_ingreso,
         cargo,
         color,
+        torre_asignada,
+        piso_asignado,
         activo
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
       `,
       [
         payload.nombre,
@@ -544,6 +836,8 @@ app.post("/medicos", async (req, res) => {
         payload.fecha_ingreso,
         payload.cargo,
         payload.color,
+        payload.torre_asignada,
+        payload.piso_asignado,
       ]
     );
 
@@ -552,37 +846,29 @@ app.post("/medicos", async (req, res) => {
     return ok(res, medico);
   } catch (error) {
     if (String(error.message || "").includes("UNIQUE")) {
-      return fail(res, new Error("Ya existe un médico con ese documento"), 400);
+      return fail(res, new Error("Ya existe un mÃ©dico con ese documento"), 400);
     }
 
     return fail(res, error);
   }
 });
 
-app.put("/medicos/:id", async (req, res) => {
+app.put("/medicos/:id", requireAdmin, async (req, res) => {
   try {
     const id = Number(req.params.id);
 
     if (!id) {
-      return fail(res, new Error("ID inválido"), 400);
+      return fail(res, new Error("ID invÃ¡lido"), 400);
     }
 
-    const payload = {
-      nombre: cleanText(req.body.nombre),
-      apellido: cleanText(req.body.apellido),
-      documento: cleanText(req.body.documento),
-      tipo_doc: cleanText(req.body.tipo_doc) || "CC",
-      especialidad: cleanText(req.body.especialidad),
-      registro_medico: cleanText(req.body.registro_medico),
-      telefono: cleanText(req.body.telefono),
-      email: cleanText(req.body.email),
-      fecha_ingreso: cleanText(req.body.fecha_ingreso),
-      cargo: cleanText(req.body.cargo),
-      color: cleanText(req.body.color) || "#4f8ef7",
-    };
+    const payload = medicoPayloadFromBody(req.body);
 
     if (!payload.nombre || !payload.apellido || !payload.documento) {
       return fail(res, new Error("Nombre, apellido y documento son obligatorios"), 400);
+    }
+
+    if (!validarTorrePiso(payload.torre_asignada, payload.piso_asignado)) {
+      return fail(res, new Error("La torre y el piso asignado no son vÃ¡lidos"), 400);
     }
 
     await run(
@@ -598,7 +884,9 @@ app.put("/medicos/:id", async (req, res) => {
           email = ?,
           fecha_ingreso = ?,
           cargo = ?,
-          color = ?
+          color = ?,
+          torre_asignada = ?,
+          piso_asignado = ?
       WHERE id = ?
       `,
       [
@@ -613,6 +901,8 @@ app.put("/medicos/:id", async (req, res) => {
         payload.fecha_ingreso,
         payload.cargo,
         payload.color,
+        payload.torre_asignada,
+        payload.piso_asignado,
         id,
       ]
     );
@@ -622,39 +912,47 @@ app.put("/medicos/:id", async (req, res) => {
     return ok(res, medico);
   } catch (error) {
     if (String(error.message || "").includes("UNIQUE")) {
-      return fail(res, new Error("Ya existe un médico con ese documento"), 400);
+      return fail(res, new Error("Ya existe un mÃ©dico con ese documento"), 400);
     }
 
     return fail(res, error);
   }
 });
 
-app.delete("/medicos/:id", async (req, res) => {
+app.delete("/medicos/:id", requireAdmin, async (req, res) => {
   try {
     const id = Number(req.params.id);
 
     if (!id) {
-      return fail(res, new Error("ID inválido"), 400);
+      return fail(res, new Error("ID invÃ¡lido"), 400);
     }
 
-    await run("DELETE FROM turnos WHERE medico_id = ?", [id]);
-    await run("DELETE FROM horas_adicionales WHERE medico_id = ?", [id]);
+    await run("BEGIN TRANSACTION");
 
-    await run(
-      `
-      UPDATE usuarios
-      SET medico_id = NULL,
-          activo = 0
-      WHERE medico_id = ?
-      `,
-      [id]
-    );
+    try {
+      await run("DELETE FROM turnos WHERE medico_id = ?", [id]);
+      await run("DELETE FROM horas_adicionales WHERE medico_id = ?", [id]);
 
-    await run("UPDATE medicos SET activo = 0 WHERE id = ?", [id]);
+      await run(
+        `
+        UPDATE usuarios
+        SET medico_id = NULL
+        WHERE medico_id = ?
+        `,
+        [id]
+      );
+
+      await run("UPDATE medicos SET activo = 0 WHERE id = ?", [id]);
+
+      await run("COMMIT");
+    } catch (error) {
+      await run("ROLLBACK");
+      throw error;
+    }
 
     return ok(res, {
       ok: true,
-      message: "Médico eliminado correctamente",
+      message: "MÃ©dico eliminado correctamente",
     });
   } catch (error) {
     return fail(res, error);
@@ -662,7 +960,7 @@ app.delete("/medicos/:id", async (req, res) => {
 });
 
 /* ============================================================================
-   USUARIOS
+   USUARIOS / ADMINISTRADORES
 ============================================================================ */
 app.get("/usuarios", async (req, res) => {
   try {
@@ -688,21 +986,78 @@ app.get("/usuarios", async (req, res) => {
   }
 });
 
-app.post("/usuarios", async (req, res) => {
+app.get("/administradores", async (req, res) => {
+  try {
+    const rows = await all(
+      `
+      SELECT id,
+             username,
+             rol,
+             medico_id,
+             cedula,
+             nombre,
+             activo,
+             created_at
+      FROM usuarios
+      WHERE activo = 1
+        AND (rol = 'coordinador' OR rol = 'administrador' OR rol = 'admin')
+      ORDER BY nombre COLLATE NOCASE ASC, username COLLATE NOCASE ASC
+      `
+    );
+
+    const adminFijoMedico = await buscarMedicoPorDocumento(ADMIN_CEDULA_FIJA);
+
+    const adminFijo = {
+      id: 0,
+      username: "Fernando Rodriguez Bayona",
+      rol: "coordinador",
+      medico_id: adminFijoMedico?.id || null,
+      cedula: ADMIN_CEDULA_FIJA,
+      nombre: "Fernando Rodriguez Bayona",
+      activo: 1,
+      created_at: null,
+      admin_fijo: true,
+      es_admin: true,
+      es_medico: !!adminFijoMedico,
+    };
+
+    return ok(res, [adminFijo, ...rows.map(publicUser)]);
+  } catch (error) {
+    return fail(res, error);
+  }
+});
+
+app.post("/usuarios", requireAdmin, async (req, res) => {
   try {
     const username = cleanText(req.body.username);
     const password = cleanText(req.body.password);
     const rol = normalizeRol(req.body.rol);
     const medico_id = req.body.medico_id ? Number(req.body.medico_id) : null;
-    const cedula = cleanText(req.body.cedula);
-    const nombre = cleanText(req.body.nombre);
+    const cedula = toNull(req.body.cedula);
+    const nombre = toNull(req.body.nombre);
 
     if (!username || !password) {
-      return fail(res, new Error("Usuario y contraseña son obligatorios"), 400);
+      return fail(res, new Error("Usuario y contraseÃ±a son obligatorios"), 400);
     }
 
     if (rol === "medico" && !medico_id) {
-      return fail(res, new Error("El usuario médico debe estar vinculado a un médico"), 400);
+      return fail(res, new Error("El usuario mÃ©dico debe estar vinculado a un mÃ©dico"), 400);
+    }
+
+    if (medico_id) {
+      const medico = await get(
+        `
+        SELECT id
+        FROM medicos
+        WHERE id = ?
+          AND activo = 1
+        `,
+        [medico_id]
+      );
+
+      if (!medico) {
+        return fail(res, new Error("El mÃ©dico vinculado no existe"), 400);
+      }
     }
 
     const result = await run(
@@ -718,14 +1073,7 @@ app.post("/usuarios", async (req, res) => {
       )
       VALUES (?, ?, ?, ?, ?, ?, 1)
       `,
-      [
-        username,
-        password,
-        rol,
-        medico_id,
-        cedula || null,
-        nombre || null,
-      ]
+      [username, hashPassword(password), rol, medico_id, cedula, nombre]
     );
 
     const usuario = await get(
@@ -754,13 +1102,89 @@ app.post("/usuarios", async (req, res) => {
   }
 });
 
-app.put("/usuarios/:id/reset-password", async (req, res) => {
+app.put("/usuarios/:id", requireAdmin, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+
+    if (!id) {
+      return fail(res, new Error("ID invÃ¡lido"), 400);
+    }
+
+    const usuarioActual = await get("SELECT * FROM usuarios WHERE id = ? AND activo = 1", [id]);
+
+    if (!usuarioActual) {
+      return fail(res, new Error("Usuario no encontrado"), 404);
+    }
+
+    const username = cleanText(req.body.username || usuarioActual.username);
+    const rol = normalizeRol(req.body.rol || usuarioActual.rol);
+    const medico_id =
+      req.body.medico_id === "" || req.body.medico_id === null || req.body.medico_id === undefined
+        ? null
+        : Number(req.body.medico_id);
+    const cedula = toNull(req.body.cedula ?? usuarioActual.cedula);
+    const nombre = toNull(req.body.nombre ?? usuarioActual.nombre);
+
+    if (!username) {
+      return fail(res, new Error("El usuario es obligatorio"), 400);
+    }
+
+    if (medico_id) {
+      const medico = await get("SELECT id FROM medicos WHERE id = ? AND activo = 1", [
+        medico_id,
+      ]);
+
+      if (!medico) {
+        return fail(res, new Error("El mÃ©dico vinculado no existe"), 400);
+      }
+    }
+
+    await run(
+      `
+      UPDATE usuarios
+      SET username = ?,
+          rol = ?,
+          medico_id = ?,
+          cedula = ?,
+          nombre = ?
+      WHERE id = ?
+      `,
+      [username, rol, medico_id, cedula, nombre, id]
+    );
+
+    const usuario = await get(
+      `
+      SELECT id,
+             username,
+             rol,
+             medico_id,
+             cedula,
+             nombre,
+             activo,
+             created_at
+      FROM usuarios
+      WHERE id = ?
+      `,
+      [id]
+    );
+
+    return ok(res, publicUser(usuario));
+  } catch (error) {
+    if (String(error.message || "").includes("UNIQUE")) {
+      return fail(res, new Error("Ya existe un usuario con ese nombre de usuario"), 400);
+    }
+
+    return fail(res, error);
+  }
+});
+
+app.put("/usuarios/:id/reset-password", requireAdmin, async (req, res) => {
   try {
     const id = Number(req.params.id);
     const nuevaPassword = cleanText(req.body.nuevaPassword || req.body.password);
 
     if (!id || !nuevaPassword) {
-      return fail(res, new Error("Usuario y nueva contraseña son obligatorios"), 400);
+      return fail(res, new Error("Usuario y nueva contraseÃ±a son obligatorios"), 400);
     }
 
     await run(
@@ -769,24 +1193,24 @@ app.put("/usuarios/:id/reset-password", async (req, res) => {
       SET password = ?
       WHERE id = ?
       `,
-      [nuevaPassword, id]
+      [hashPassword(nuevaPassword), id]
     );
 
     return ok(res, {
       ok: true,
-      message: "Contraseña actualizada correctamente",
+      message: "ContraseÃ±a actualizada correctamente",
     });
   } catch (error) {
     return fail(res, error);
   }
 });
 
-app.delete("/usuarios/:id", async (req, res) => {
+app.delete("/usuarios/:id", requireAdmin, async (req, res) => {
   try {
     const id = Number(req.params.id);
 
     if (!id) {
-      return fail(res, new Error("ID inválido"), 400);
+      return fail(res, new Error("ID invÃ¡lido"), 400);
     }
 
     await run("UPDATE usuarios SET activo = 0 WHERE id = ?", [id]);
@@ -794,6 +1218,47 @@ app.delete("/usuarios/:id", async (req, res) => {
     return ok(res, {
       ok: true,
       message: "Usuario eliminado correctamente",
+    });
+  } catch (error) {
+    return fail(res, error);
+  }
+});
+
+app.delete("/administradores/:id", requireAdmin, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+
+    if (id === 0) {
+      return fail(res, new Error("No se puede eliminar el administrador principal fijo"), 400);
+    }
+
+    if (!id) {
+      return fail(res, new Error("ID invÃ¡lido"), 400);
+    }
+
+    const usuario = await get(
+      `
+      SELECT *
+      FROM usuarios
+      WHERE id = ?
+        AND activo = 1
+      `,
+      [id]
+    );
+
+    if (!usuario) {
+      return fail(res, new Error("Administrador no encontrado"), 404);
+    }
+
+    if (!isAdminRol(usuario.rol)) {
+      return fail(res, new Error("Este usuario no es administrador"), 400);
+    }
+
+    await run("UPDATE usuarios SET activo = 0 WHERE id = ?", [id]);
+
+    return ok(res, {
+      ok: true,
+      message: "Administrador eliminado correctamente",
     });
   } catch (error) {
     return fail(res, error);
@@ -823,19 +1288,132 @@ app.get("/turnos", async (req, res) => {
   }
 });
 
-app.post("/turnos", async (req, res) => {
+app.get("/turnos/hoy", async (req, res) => {
+  try {
+    const fecha = cleanText(req.query.fecha) || new Date().toISOString().slice(0, 10);
+    const tipo = cleanText(req.query.tipo);
+
+    const params = [fecha];
+
+    let filtroTipo = "";
+
+    if (tipo) {
+      filtroTipo = "AND t.tipo_turno = ?";
+      params.push(tipo);
+    }
+
+    const rows = await all(
+      `
+      SELECT
+        t.id AS turno_id,
+        t.medico_id,
+        t.fecha,
+        t.tipo_turno,
+        m.nombre,
+        m.apellido,
+        m.documento,
+        m.tipo_doc,
+        m.especialidad,
+        m.registro_medico,
+        m.telefono,
+        m.email,
+        m.cargo,
+        m.color,
+        m.torre_asignada,
+        m.piso_asignado
+      FROM turnos t
+      INNER JOIN medicos m ON m.id = t.medico_id
+      WHERE t.fecha = ?
+        AND m.activo = 1
+        ${filtroTipo}
+      ORDER BY
+        CASE t.tipo_turno
+          WHEN 'DIA' THEN 1
+          WHEN 'CENIZO' THEN 2
+          WHEN 'FDS' THEN 3
+          ELSE 4
+        END,
+        m.torre_asignada ASC,
+        m.piso_asignado ASC,
+        m.apellido COLLATE NOCASE ASC,
+        m.nombre COLLATE NOCASE ASC
+      `,
+      params
+    );
+
+    return ok(res, rows);
+  } catch (error) {
+    return fail(res, error);
+  }
+});
+
+app.get("/especialistas-turno-hoy", async (req, res) => {
+  try {
+    const fecha = cleanText(req.query.fecha) || new Date().toISOString().slice(0, 10);
+
+    const rows = await all(
+      `
+      SELECT
+        t.id AS turno_id,
+        t.medico_id,
+        t.fecha,
+        t.tipo_turno,
+        m.nombre,
+        m.apellido,
+        m.documento,
+        m.tipo_doc,
+        m.especialidad,
+        m.registro_medico,
+        m.telefono,
+        m.email,
+        m.cargo,
+        m.color,
+        m.torre_asignada,
+        m.piso_asignado
+      FROM turnos t
+      INNER JOIN medicos m ON m.id = t.medico_id
+      WHERE t.fecha = ?
+        AND m.activo = 1
+      ORDER BY
+        m.torre_asignada ASC,
+        m.piso_asignado ASC,
+        m.especialidad COLLATE NOCASE ASC,
+        m.apellido COLLATE NOCASE ASC
+      `,
+      [fecha]
+    );
+
+    return ok(res, rows);
+  } catch (error) {
+    return fail(res, error);
+  }
+});
+
+app.post("/turnos", requireAdmin, async (req, res) => {
   try {
     const medico_id = Number(req.body.medico_id);
     const fecha = cleanText(req.body.fecha);
     const tipo_turno = cleanText(req.body.tipo_turno);
 
     if (!medico_id || !fecha || !tipo_turno) {
-      return fail(res, new Error("Médico, fecha y tipo de turno son obligatorios"), 400);
+      return fail(res, new Error("MÃ©dico, fecha y tipo de turno son obligatorios"), 400);
+    }
+
+    if (!isTipoTurnoValido(tipo_turno)) {
+      return fail(res, new Error("Tipo de turno invÃ¡lido"), 400);
+    }
+
+    const medico = await get("SELECT id FROM medicos WHERE id = ? AND activo = 1", [
+      medico_id,
+    ]);
+
+    if (!medico) {
+      return fail(res, new Error("MÃ©dico no encontrado"), 404);
     }
 
     await run(
       `
-      INSERT OR IGNORE INTO turnos (
+      INSERT INTO turnos (
         medico_id,
         fecha,
         tipo_turno
@@ -862,14 +1440,14 @@ app.post("/turnos", async (req, res) => {
   }
 });
 
-app.delete("/turnos", async (req, res) => {
+app.delete("/turnos", requireAdmin, async (req, res) => {
   try {
     const medico_id = Number(req.body.medico_id);
     const fecha = cleanText(req.body.fecha);
     const tipo_turno = cleanText(req.body.tipo_turno);
 
     if (!medico_id || !fecha || !tipo_turno) {
-      return fail(res, new Error("Médico, fecha y tipo de turno son obligatorios"), 400);
+      return fail(res, new Error("MÃ©dico, fecha y tipo de turno son obligatorios"), 400);
     }
 
     await run(
@@ -891,12 +1469,12 @@ app.delete("/turnos", async (req, res) => {
   }
 });
 
-app.delete("/turnos/:id", async (req, res) => {
+app.delete("/turnos/:id", requireAdmin, async (req, res) => {
   try {
     const id = Number(req.params.id);
 
     if (!id) {
-      return fail(res, new Error("ID inválido"), 400);
+      return fail(res, new Error("ID invÃ¡lido"), 400);
     }
 
     await run("DELETE FROM turnos WHERE id = ?", [id]);
@@ -929,7 +1507,7 @@ app.get("/horas-adicionales", async (req, res) => {
   }
 });
 
-app.post("/horas-adicionales", async (req, res) => {
+app.post("/horas-adicionales", requireAuth, async (req, res) => {
   try {
     const medico_id = Number(req.body.medico_id);
     const fecha = cleanText(req.body.fecha);
@@ -937,11 +1515,15 @@ app.post("/horas-adicionales", async (req, res) => {
     const motivo = cleanText(req.body.motivo);
 
     if (!medico_id || !fecha) {
-      return fail(res, new Error("Médico y fecha son obligatorios"), 400);
+      return fail(res, new Error("MÃ©dico y fecha son obligatorios"), 400);
+    }
+
+    if (!canManageMedico(req, medico_id)) {
+      return fail(res, new Error("No puedes modificar datos de otro mÃ©dico"), 403);
     }
 
     if (Number.isNaN(horas) || horas < 0) {
-      return fail(res, new Error("Horas adicionales inválidas"), 400);
+      return fail(res, new Error("Horas adicionales invÃ¡lidas"), 400);
     }
 
     const existente = await get(
@@ -1032,12 +1614,12 @@ app.get("/configuracion/tarifa-hora", async (req, res) => {
   }
 });
 
-app.put("/configuracion/tarifa-hora", async (req, res) => {
+app.put("/configuracion/tarifa-hora", requireAdmin, async (req, res) => {
   try {
     const tarifaHora = Number(req.body.tarifaHora || req.body.valor);
 
     if (!tarifaHora || tarifaHora <= 0) {
-      return fail(res, new Error("Tarifa por hora inválida"), 400);
+      return fail(res, new Error("Tarifa por hora invÃ¡lida"), 400);
     }
 
     const existente = await get(
@@ -1100,7 +1682,7 @@ app.get("/solicitudes-cambio-turno", async (req, res) => {
   }
 });
 
-app.post("/solicitudes-cambio-turno", async (req, res) => {
+app.post("/solicitudes-cambio-turno", requireAuth, async (req, res) => {
   try {
     const medico_solicitante_id = Number(
       req.body.medico_solicitante_id || req.body.medico_id
@@ -1111,7 +1693,7 @@ app.post("/solicitudes-cambio-turno", async (req, res) => {
     const fecha_destino = cleanText(req.body.fecha_destino);
     const tipo_turno_destino = cleanText(req.body.tipo_turno_destino);
     const mensaje = cleanText(req.body.mensaje);
-    const estado = normalizeEstado(req.body.estado);
+    const estado = "pendiente";
 
     if (
       !medico_solicitante_id ||
@@ -1122,6 +1704,44 @@ app.post("/solicitudes-cambio-turno", async (req, res) => {
       !tipo_turno_destino
     ) {
       return fail(res, new Error("Datos incompletos para solicitud de cambio"), 400);
+    }
+
+    if (!canManageMedico(req, medico_solicitante_id)) {
+      return fail(res, new Error("No puedes solicitar cambios a nombre de otro mÃ©dico"), 403);
+    }
+
+    if (!isTipoTurnoValido(tipo_turno_origen) || !isTipoTurnoValido(tipo_turno_destino)) {
+      return fail(res, new Error("Tipo de turno invÃ¡lido"), 400);
+    }
+
+    const turnoOrigen = await get(
+      `
+      SELECT *
+      FROM turnos
+      WHERE medico_id = ?
+        AND fecha = ?
+        AND tipo_turno = ?
+      `,
+      [medico_solicitante_id, fecha_origen, tipo_turno_origen]
+    );
+
+    if (!turnoOrigen) {
+      return fail(res, new Error("El turno origen no existe"), 400);
+    }
+
+    const turnoDestino = await get(
+      `
+      SELECT *
+      FROM turnos
+      WHERE medico_id = ?
+        AND fecha = ?
+        AND tipo_turno = ?
+      `,
+      [medico_destino_id, fecha_destino, tipo_turno_destino]
+    );
+
+    if (!turnoDestino) {
+      return fail(res, new Error("El turno destino no existe"), 400);
     }
 
     const result = await run(
@@ -1163,7 +1783,7 @@ app.post("/solicitudes-cambio-turno", async (req, res) => {
   }
 });
 
-app.put("/solicitudes-cambio-turno/:id/aprobar", async (req, res) => {
+app.put("/solicitudes-cambio-turno/:id/aprobar", requireAdmin, async (req, res) => {
   try {
     const id = Number(req.params.id);
 
@@ -1174,6 +1794,10 @@ app.put("/solicitudes-cambio-turno/:id/aprobar", async (req, res) => {
 
     if (!solicitud) {
       return fail(res, new Error("Solicitud no encontrada"), 404);
+    }
+
+    if (solicitud.estado !== "pendiente") {
+      return fail(res, new Error("Esta solicitud ya fue gestionada"), 400);
     }
 
     await run("BEGIN TRANSACTION");
@@ -1209,7 +1833,7 @@ app.put("/solicitudes-cambio-turno/:id/aprobar", async (req, res) => {
 
       await run(
         `
-        INSERT OR IGNORE INTO turnos (
+        INSERT INTO turnos (
           medico_id,
           fecha,
           tipo_turno
@@ -1225,7 +1849,7 @@ app.put("/solicitudes-cambio-turno/:id/aprobar", async (req, res) => {
 
       await run(
         `
-        INSERT OR IGNORE INTO turnos (
+        INSERT INTO turnos (
           medico_id,
           fecha,
           tipo_turno
@@ -1266,9 +1890,22 @@ app.put("/solicitudes-cambio-turno/:id/aprobar", async (req, res) => {
   }
 });
 
-app.put("/solicitudes-cambio-turno/:id/rechazar", async (req, res) => {
+app.put("/solicitudes-cambio-turno/:id/rechazar", requireAdmin, async (req, res) => {
   try {
     const id = Number(req.params.id);
+
+    const solicitud = await get(
+      "SELECT * FROM solicitudes_cambio_turno WHERE id = ?",
+      [id]
+    );
+
+    if (!solicitud) {
+      return fail(res, new Error("Solicitud no encontrada"), 404);
+    }
+
+    if (solicitud.estado !== "pendiente") {
+      return fail(res, new Error("Esta solicitud ya fue gestionada"), 400);
+    }
 
     await run(
       `
@@ -1310,7 +1947,7 @@ app.get("/solicitudes-cesion-turno", async (req, res) => {
   }
 });
 
-app.post("/solicitudes-cesion-turno", async (req, res) => {
+app.post("/solicitudes-cesion-turno", requireAuth, async (req, res) => {
   try {
     const medico_solicitante_id = Number(
       req.body.medico_solicitante_id || req.body.medico_id
@@ -1319,10 +1956,41 @@ app.post("/solicitudes-cesion-turno", async (req, res) => {
     const fecha = cleanText(req.body.fecha);
     const tipo_turno = cleanText(req.body.tipo_turno);
     const mensaje = cleanText(req.body.mensaje);
-    const estado = normalizeEstado(req.body.estado);
+    const estado = "pendiente";
 
     if (!medico_solicitante_id || !medico_receptor_id || !fecha || !tipo_turno) {
-      return fail(res, new Error("Datos incompletos para solicitud de cesión"), 400);
+      return fail(res, new Error("Datos incompletos para solicitud de cesiÃ³n"), 400);
+    }
+
+    if (!canManageMedico(req, medico_solicitante_id)) {
+      return fail(res, new Error("No puedes ceder turnos a nombre de otro mÃ©dico"), 403);
+    }
+
+    if (!isTipoTurnoValido(tipo_turno)) {
+      return fail(res, new Error("Tipo de turno invÃ¡lido"), 400);
+    }
+
+    const turnoOrigen = await get(
+      `
+      SELECT *
+      FROM turnos
+      WHERE medico_id = ?
+        AND fecha = ?
+        AND tipo_turno = ?
+      `,
+      [medico_solicitante_id, fecha, tipo_turno]
+    );
+
+    if (!turnoOrigen) {
+      return fail(res, new Error("El turno a ceder no existe"), 400);
+    }
+
+    const receptor = await get("SELECT id FROM medicos WHERE id = ? AND activo = 1", [
+      medico_receptor_id,
+    ]);
+
+    if (!receptor) {
+      return fail(res, new Error("El mÃ©dico receptor no existe"), 400);
     }
 
     const result = await run(
@@ -1360,7 +2028,7 @@ app.post("/solicitudes-cesion-turno", async (req, res) => {
   }
 });
 
-app.put("/solicitudes-cesion-turno/:id/aprobar", async (req, res) => {
+app.put("/solicitudes-cesion-turno/:id/aprobar", requireAdmin, async (req, res) => {
   try {
     const id = Number(req.params.id);
 
@@ -1371,6 +2039,10 @@ app.put("/solicitudes-cesion-turno/:id/aprobar", async (req, res) => {
 
     if (!solicitud) {
       return fail(res, new Error("Solicitud no encontrada"), 404);
+    }
+
+    if (solicitud.estado !== "pendiente") {
+      return fail(res, new Error("Esta solicitud ya fue gestionada"), 400);
     }
 
     await run("BEGIN TRANSACTION");
@@ -1392,7 +2064,7 @@ app.put("/solicitudes-cesion-turno/:id/aprobar", async (req, res) => {
 
       await run(
         `
-        INSERT OR IGNORE INTO turnos (
+        INSERT INTO turnos (
           medico_id,
           fecha,
           tipo_turno
@@ -1433,9 +2105,22 @@ app.put("/solicitudes-cesion-turno/:id/aprobar", async (req, res) => {
   }
 });
 
-app.put("/solicitudes-cesion-turno/:id/rechazar", async (req, res) => {
+app.put("/solicitudes-cesion-turno/:id/rechazar", requireAdmin, async (req, res) => {
   try {
     const id = Number(req.params.id);
+
+    const solicitud = await get(
+      "SELECT * FROM solicitudes_cesion_turno WHERE id = ?",
+      [id]
+    );
+
+    if (!solicitud) {
+      return fail(res, new Error("Solicitud no encontrada"), 404);
+    }
+
+    if (solicitud.estado !== "pendiente") {
+      return fail(res, new Error("Esta solicitud ya fue gestionada"), 400);
+    }
 
     await run(
       `
@@ -1477,7 +2162,7 @@ app.get("/solicitudes-horario", async (req, res) => {
   }
 });
 
-app.post("/solicitudes-horario", async (req, res) => {
+app.post("/solicitudes-horario", requireAuth, async (req, res) => {
   try {
     const medico_id = Number(req.body.medico_id || req.body.medico_solicitante_id);
     const year = req.body.year ? Number(req.body.year) : null;
@@ -1486,10 +2171,22 @@ app.post("/solicitudes-horario", async (req, res) => {
       ? Number(req.body.mes_programacion)
       : mes;
     const mensaje = cleanText(req.body.mensaje);
-    const estado = normalizeEstado(req.body.estado);
+    const estado = "pendiente";
 
     if (!medico_id || !mensaje) {
-      return fail(res, new Error("Médico y mensaje son obligatorios"), 400);
+      return fail(res, new Error("MÃ©dico y mensaje son obligatorios"), 400);
+    }
+
+    if (!canManageMedico(req, medico_id)) {
+      return fail(res, new Error("No puedes solicitar horarios a nombre de otro mÃ©dico"), 403);
+    }
+
+    const medico = await get("SELECT id FROM medicos WHERE id = ? AND activo = 1", [
+      medico_id,
+    ]);
+
+    if (!medico) {
+      return fail(res, new Error("MÃ©dico no encontrado"), 404);
     }
 
     const result = await run(
@@ -1526,9 +2223,21 @@ app.post("/solicitudes-horario", async (req, res) => {
   }
 });
 
-app.put("/solicitudes-horario/:id/aprobar", async (req, res) => {
+app.put("/solicitudes-horario/:id/aprobar", requireAdmin, async (req, res) => {
   try {
     const id = Number(req.params.id);
+
+    const solicitud = await get("SELECT * FROM solicitudes_horario WHERE id = ?", [
+      id,
+    ]);
+
+    if (!solicitud) {
+      return fail(res, new Error("Solicitud no encontrada"), 404);
+    }
+
+    if (solicitud.estado !== "pendiente") {
+      return fail(res, new Error("Esta solicitud ya fue gestionada"), 400);
+    }
 
     await run(
       `
@@ -1550,9 +2259,21 @@ app.put("/solicitudes-horario/:id/aprobar", async (req, res) => {
   }
 });
 
-app.put("/solicitudes-horario/:id/rechazar", async (req, res) => {
+app.put("/solicitudes-horario/:id/rechazar", requireAdmin, async (req, res) => {
   try {
     const id = Number(req.params.id);
+
+    const solicitud = await get("SELECT * FROM solicitudes_horario WHERE id = ?", [
+      id,
+    ]);
+
+    if (!solicitud) {
+      return fail(res, new Error("Solicitud no encontrada"), 404);
+    }
+
+    if (solicitud.estado !== "pendiente") {
+      return fail(res, new Error("Esta solicitud ya fue gestionada"), 400);
+    }
 
     await run(
       `
@@ -1591,3 +2312,4 @@ app.use((req, res) => {
 app.listen(PORT, () => {
   console.log(`Servidor TurnosMed corriendo en puerto ${PORT}`);
 });
+

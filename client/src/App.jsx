@@ -8,7 +8,6 @@ const API_URL =
   import.meta.env.VITE_API_URL || "https://turnosmed-backend.onrender.com";
 
 const ADMIN_CEDULA_FIJA = "6662672";
-const ADMIN_PASSWORD_FIJA = "6662672";
 
 const PANTALLAS = {
   SELECTOR: "selector",
@@ -22,6 +21,11 @@ const VIEWS_COORD = {
   CALENDARIO: "calendario",
   MEDICOS: "medicos",
   HORARIOS: "horarios",
+};
+
+const VIEWS_MEDICO = {
+  HORARIO: "horario",
+  SOLICITUDES: "solicitudes",
 };
 
 const ESTADOS = {
@@ -105,6 +109,12 @@ const EXTRA_FORM0 = {
   motivo: "",
 };
 
+const MEDICO_EXTRA_FORM0 = {
+  fecha: "",
+  horas: "",
+  motivo: "",
+};
+
 const USER_FORM0 = {
   medico_id: "",
   username: "",
@@ -158,6 +168,16 @@ function getDias(y, m) {
 function isWE(d) {
   const w = d.getDay();
   return w === 0 || w === 6;
+}
+
+function esFechaFinSemana(fecha) {
+  if (!fecha) return false;
+
+  const d = fecha instanceof Date ? fecha : new Date(`${fecha}T12:00:00`);
+
+  if (Number.isNaN(d.getTime())) return false;
+
+  return isWE(d);
 }
 
 function mesLabel(y, m) {
@@ -256,8 +276,12 @@ function turnosDiaOrdenados(tipos = []) {
     .sort((a, b) => (orden[a] || 99) - (orden[b] || 99));
 }
 
-function puedeAgregarTurno(tiposActuales = [], tipoNuevo) {
+function puedeAgregarTurno(tiposActuales = [], tipoNuevo, fecha = "") {
   const tipos = turnosDiaOrdenados(tiposActuales);
+
+  if (tipoNuevo === "FDS" && !esFechaFinSemana(fecha)) {
+    return { ok: false, msg: "El turno Fin de Semana solo se puede asignar sábado o domingo" };
+  }
 
   if (tipos.includes(tipoNuevo)) {
     return { ok: false, msg: "Ese turno ya está cargado en ese día" };
@@ -352,7 +376,16 @@ async function api(path, options = {}) {
     throw new Error("Falta configurar VITE_API_URL en el frontend");
   }
 
-  const res = await fetch(`${API_URL}${path}`, options);
+  const token = localStorage.getItem("authToken");
+  const headers = {
+    ...(options.headers || {}),
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  };
+
+  const res = await fetch(`${API_URL}${path}`, {
+    ...options,
+    headers,
+  });
   let data = null;
 
   try {
@@ -399,6 +432,7 @@ export default function App() {
 
   const [propMes, setPropMes] = useState(IM);
   const [propYear, setPropYear] = useState(IY);
+  const [medicoView, setMedicoView] = useState(VIEWS_MEDICO.HORARIO);
 
   const [adminCedula, setAdminCedula] = useState("");
   const [adminPassword, setAdminPassword] = useState("");
@@ -408,6 +442,7 @@ export default function App() {
   const [loginMode, setLoginMode] = useState("admin");
 
   const [extraForm, setExtraForm] = useState(EXTRA_FORM0);
+  const [medicoExtraForm, setMedicoExtraForm] = useState(MEDICO_EXTRA_FORM0);
   const [userForm, setUserForm] = useState(USER_FORM0);
   const [adminForm, setAdminForm] = useState(ADMIN_FORM0);
   const [resetPassForm, setResetPassForm] = useState(RESET_PASS_FORM0);
@@ -530,6 +565,15 @@ export default function App() {
     const usuarioGuardado = safeJsonParse(localStorage.getItem("usuarioSesion"));
     const medicoGuardado = safeJsonParse(localStorage.getItem("medicoActivo"));
     const pantallaGuardada = localStorage.getItem("pantalla");
+    const tokenGuardado = localStorage.getItem("authToken");
+
+    if (!tokenGuardado) {
+      localStorage.removeItem("usuarioSesion");
+      localStorage.removeItem("medicoActivo");
+      localStorage.removeItem("pantalla");
+      setPantalla(PANTALLAS.SELECTOR);
+      return;
+    }
 
     if (usuarioGuardado) setUsuarioSesion(usuarioGuardado);
     if (medicoGuardado) setMedicoActivo(medicoGuardado);
@@ -624,35 +668,11 @@ export default function App() {
     setMedicoActivo(null);
     setUsuarioSesion(null);
     limpiarLogin();
+    localStorage.removeItem("authToken");
     localStorage.removeItem("usuarioSesion");
     localStorage.removeItem("medicoActivo");
     localStorage.removeItem("pantalla");
     setPantalla(PANTALLAS.SELECTOR);
-  }
-
-  function entrarComoAdministradorFijo() {
-    const usuarioFijo = {
-      id: 0,
-      nombre: "Fernando Rodriguez Bayona",
-      username: "Fernando Rodriguez Bayona",
-      rol: "coordinador",
-      medico_id: null,
-      cedula: ADMIN_CEDULA_FIJA,
-      activo: 1,
-      admin_fijo: true,
-    };
-
-    setUsuarioSesion(usuarioFijo);
-    setMedicoActivo(null);
-
-    localStorage.setItem("usuarioSesion", JSON.stringify(usuarioFijo));
-    localStorage.removeItem("medicoActivo");
-    localStorage.setItem("pantalla", PANTALLAS.COORD);
-
-    setAdminCedula("");
-    setAdminPassword("");
-    setLoginErr("");
-    setPantalla(PANTALLAS.COORD);
   }
 
   async function loginAdministradorCredenciales() {
@@ -661,14 +681,6 @@ export default function App() {
 
     if (!cedulaDigitada || !passwordDigitado) {
       setLoginErr("Debes ingresar cédula y contraseña del administrador");
-      return;
-    }
-
-    if (
-      cedulaDigitada === ADMIN_CEDULA_FIJA &&
-      passwordDigitado === ADMIN_PASSWORD_FIJA
-    ) {
-      entrarComoAdministradorFijo();
       return;
     }
 
@@ -687,24 +699,40 @@ export default function App() {
         return;
       }
 
+      if (!data?.token) {
+        setLoginErr("El servidor no devolviÃ³ una sesiÃ³n vÃ¡lida");
+        return;
+      }
+
       if (data.usuario.rol !== "coordinador" && data.usuario.rol !== "administrador") {
         setLoginErr("Este usuario no tiene permisos de administrador");
         return;
       }
 
+      const medicoAdmin =
+        data.medico ||
+        medicos.find((m) => String(m.documento) === String(data.usuario.cedula)) ||
+        null;
+
       const usuarioNormalizado = {
         ...data.usuario,
         rol: "coordinador",
+        medico_id: data.usuario.medico_id || medicoAdmin?.id || null,
+        es_admin: true,
+        es_medico: !!medicoAdmin,
       };
 
       setUsuarioSesion(usuarioNormalizado);
-      setMedicoActivo(null);
+      setMedicoActivo(medicoAdmin);
 
+      localStorage.setItem("authToken", data.token || "");
       localStorage.setItem("usuarioSesion", JSON.stringify(usuarioNormalizado));
-      localStorage.removeItem("medicoActivo");
+      if (medicoAdmin) localStorage.setItem("medicoActivo", JSON.stringify(medicoAdmin));
+      else localStorage.removeItem("medicoActivo");
       localStorage.setItem("pantalla", PANTALLAS.COORD);
 
       limpiarLogin();
+      setMedicoView(VIEWS_MEDICO.HORARIO);
       setPantalla(PANTALLAS.COORD);
     } catch (error) {
       console.error(error);
@@ -733,6 +761,11 @@ export default function App() {
         return;
       }
 
+      if (!data?.token) {
+        setLoginErr("El servidor no devolviÃ³ una sesiÃ³n vÃ¡lida");
+        return;
+      }
+
       if (data.usuario.rol === "coordinador" || data.usuario.rol === "administrador") {
         setLoginErr("El administrador debe ingresar por la pestaña Administrador");
         return;
@@ -753,6 +786,7 @@ export default function App() {
       setUsuarioSesion(data.usuario);
       setMedicoActivo(med);
 
+      localStorage.setItem("authToken", data.token || "");
       localStorage.setItem("usuarioSesion", JSON.stringify(data.usuario));
       localStorage.setItem("medicoActivo", JSON.stringify(med));
       localStorage.setItem("pantalla", PANTALLAS.MEDICO);
@@ -968,6 +1002,25 @@ export default function App() {
     }
   }
 
+  async function eliminarAdministrador(id) {
+    if (Number(id) === 0) {
+      showToast("No se puede eliminar el administrador principal fijo", "err");
+      return;
+    }
+
+    const confirmado = window.confirm("¿Seguro que deseas eliminar este administrador?");
+    if (!confirmado) return;
+
+    try {
+      await api(`/administradores/${id}`, { method: "DELETE" });
+      await cargarUsuarios();
+      showToast("Administrador eliminado correctamente ✓");
+    } catch (error) {
+      console.error(error);
+      showToast(error.message || "No se pudo eliminar el administrador", "err");
+    }
+  }
+
   async function resetearPasswordUsuario() {
     const usuario_id = Number(resetPassForm.usuario_id);
     const nuevaPassword = String(resetPassForm.nuevaPassword || "").trim();
@@ -1054,10 +1107,63 @@ export default function App() {
     }
   }
 
+  async function guardarHorasExtraMedico() {
+    if (!medicoActivo?.id) {
+      showToast("Sesión médica no válida", "err");
+      return;
+    }
+
+    const fecha = medicoExtraForm.fecha;
+    const horas = Number(medicoExtraForm.horas || 0);
+    const motivo = String(medicoExtraForm.motivo || "").trim();
+
+    if (!fecha) {
+      showToast("Selecciona la fecha del fin de semana", "err");
+      return;
+    }
+
+    if (!esFechaFinSemana(fecha)) {
+      showToast("Las horas extra desde el perfil médico solo se registran para sábados o domingos", "err");
+      return;
+    }
+
+    if (!horas || Number.isNaN(horas) || horas <= 0) {
+      showToast("Ingresa un número válido de horas extra", "err");
+      return;
+    }
+
+    try {
+      await api("/horas-adicionales", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          medico_id: medicoActivo.id,
+          fecha,
+          horas,
+          motivo: motivo || "Horas extra reportadas por el médico durante fin de semana",
+        }),
+      });
+
+      setHorasAdicionales((prev) => ({
+        ...prev,
+        [`${medicoActivo.id}_${fecha}`]: {
+          horas,
+          motivo: motivo || "Horas extra reportadas por el médico durante fin de semana",
+        },
+      }));
+
+      setMedicoExtraForm(MEDICO_EXTRA_FORM0);
+      showToast("Horas extra de fin de semana enviadas correctamente ✓");
+    } catch (error) {
+      console.error(error);
+      showToast(error.message || "No se pudieron enviar las horas extra", "err");
+    }
+  }
+
   async function agregarTurnoCoord(medicoId, fecha, tipoTurno) {
     try {
       const actuales = getTurnosDia(medicoId, fecha);
-      const validacion = puedeAgregarTurno(actuales, tipoTurno);
+      const validacion = puedeAgregarTurno(actuales, tipoTurno, fecha);
 
       if (!validacion.ok) {
         showToast(validacion.msg, "err");
@@ -1408,7 +1514,14 @@ export default function App() {
   }
 
   if (pantalla === PANTALLAS.MEDICO) {
-    if (!medicoActivo || usuarioSesion?.rol !== "medico") {
+    const puedeVerComoMedico =
+      !!medicoActivo &&
+      (usuarioSesion?.rol === "medico" ||
+        usuarioSesion?.rol === "coordinador" ||
+        usuarioSesion?.es_medico);
+    const puedeVolverAdmin = usuarioSesion?.rol === "coordinador" || usuarioSesion?.es_admin;
+
+    if (!puedeVerComoMedico) {
       return (
         <div className="tm-page-center" style={S.pageCenter}>
           <ResponsiveStyles />
@@ -1417,7 +1530,9 @@ export default function App() {
           <div className="tm-card" style={S.cardRestrict}>
             <div style={{ fontSize: 42, marginBottom: 12 }}>🔒</div>
             <div style={S.restrictTitle}>Sesión médica no válida</div>
-            <div style={S.restrictText}>Vuelva a ingresar con usuario y contraseña.</div>
+            <div style={S.restrictText}>
+              Vuelva a ingresar con usuario médico o con un administrador vinculado a médico.
+            </div>
 
             <button type="button" onClick={logout} style={S.primaryButton}>
               Volver al inicio
@@ -1453,84 +1568,129 @@ export default function App() {
             </div>
           </div>
 
-          <button type="button" onClick={logout} style={S.logoutBtn}>
-            Cerrar sesión
-          </button>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            {puedeVolverAdmin && (
+              <button
+                type="button"
+                onClick={() => {
+                  localStorage.setItem("pantalla", PANTALLAS.COORD);
+                  setPantalla(PANTALLAS.COORD);
+                }}
+                style={S.primaryButton}
+              >
+                Panel administrador
+              </button>
+            )}
+
+            <button type="button" onClick={logout} style={S.logoutBtn}>
+              Cerrar sesión
+            </button>
+          </div>
         </div>
 
         <div className="tm-medico-wrap" style={S.medicoWrap}>
-          <h1 className="tm-page-title" style={S.pageTitle}>
-            📅 Mi horario
-          </h1>
-
-          <p style={S.pageSubtitle}>
-            Consulta tus turnos asignados por mes y envía solicitudes a coordinación.
-          </p>
-
-          <div className="tm-month-selector" style={S.monthSelector}>
+          <div style={S.medicoTopTabs}>
             <button
               type="button"
-              onClick={() => navMes(-1, setPropYear, setPropMes, propYear, propMes)}
-              style={S.bnav}
+              onClick={() => setMedicoView(VIEWS_MEDICO.HORARIO)}
+              style={S.medicoTab(medicoView === VIEWS_MEDICO.HORARIO)}
             >
-              ‹
+              📅 Mi horario
             </button>
-
-            <span className="tm-month-title" style={S.monthTitle}>
-              {capFirst(mesLabel(propYear, propMes))}
-            </span>
 
             <button
               type="button"
-              onClick={() => navMes(1, setPropYear, setPropMes, propYear, propMes)}
-              style={S.bnav}
+              onClick={() => setMedicoView(VIEWS_MEDICO.SOLICITUDES)}
+              style={S.medicoTab(medicoView === VIEWS_MEDICO.SOLICITUDES)}
             >
-              ›
+              📬 Solicitudes
             </button>
-
-            <span style={S.badgeBlue}>{hMes}h totales</span>
-            <span style={S.badgeGreen}>{formatCOP(sueldoMes)}</span>
           </div>
 
-          <div style={S.legend}>
-            {Object.entries(TIPOS_TURNO).map(([k, v]) => (
-              <span key={k} style={{ ...S.chip, background: v.bg, color: v.color }}>
-                {v.emoji} {v.label} {v.horas}h
-              </span>
-            ))}
+          {medicoView === VIEWS_MEDICO.HORARIO && (
+            <>
+              <h1 className="tm-page-title" style={S.pageTitle}>
+                📅 Mi horario
+              </h1>
 
-            <span style={{ ...S.chip, background: "#1f2937", color: "#f1f5f9" }}>
-              ➕ Horas adicionales
-            </span>
-          </div>
+              <p style={S.pageSubtitle}>
+                Consulta tus turnos asignados por mes y reporta horas extra realizadas en fines de semana.
+              </p>
 
-          <MedicoCalendarioCompacto
-            diasProp={diasProp}
-            medicoActivo={medicoActivo}
-            getTurnosDia={getTurnosDia}
-            getHorasExtraDia={getHorasExtraDia}
-            horasDiaTotal={horasDiaTotal}
-          />
+              <div className="tm-month-selector" style={S.monthSelector}>
+                <button
+                  type="button"
+                  onClick={() => navMes(-1, setPropYear, setPropMes, propYear, propMes)}
+                  style={S.bnav}
+                >
+                  ‹
+                </button>
 
-          <SolicitudesMedico
-            medicoActivo={medicoActivo}
-            medicos={medicos}
-            diasProp={diasProp}
-            getTurnosDia={getTurnosDia}
-            solCambioForm={solCambioForm}
-            setSolCambioForm={setSolCambioForm}
-            solCesionForm={solCesionForm}
-            setSolCesionForm={setSolCesionForm}
-            solHorarioForm={solHorarioForm}
-            setSolHorarioForm={setSolHorarioForm}
-            enviarSolicitudCambioTurno={enviarSolicitudCambioTurno}
-            enviarSolicitudCesionTurno={enviarSolicitudCesionTurno}
-            enviarSolicitudHorario={enviarSolicitudHorario}
-            solicitudesCambioTurno={solicitudesCambioTurno}
-            solicitudesCesionTurno={solicitudesCesionTurno}
-            solicHorario={solicHorario}
-            getMedicoNombre={getMedicoNombre}
-          />
+                <span className="tm-month-title" style={S.monthTitle}>
+                  {capFirst(mesLabel(propYear, propMes))}
+                </span>
+
+                <button
+                  type="button"
+                  onClick={() => navMes(1, setPropYear, setPropMes, propYear, propMes)}
+                  style={S.bnav}
+                >
+                  ›
+                </button>
+
+                <span style={S.badgeBlue}>{hMes}h totales</span>
+                <span style={S.badgeGreen}>{formatCOP(sueldoMes)}</span>
+              </div>
+
+              <div style={S.legend}>
+                {Object.entries(TIPOS_TURNO).map(([k, v]) => (
+                  <span key={k} style={{ ...S.chip, background: v.bg, color: v.color }}>
+                    {v.emoji} {v.label} {v.horas}h
+                  </span>
+                ))}
+
+                <span style={{ ...S.chip, background: "#1f2937", color: "#f1f5f9" }}>
+                  ➕ Horas adicionales
+                </span>
+              </div>
+
+              <MedicoCalendarioCompacto
+                diasProp={diasProp}
+                medicoActivo={medicoActivo}
+                getTurnosDia={getTurnosDia}
+                getHorasExtraDia={getHorasExtraDia}
+                horasDiaTotal={horasDiaTotal}
+              />
+
+              <HorasExtraMedico
+                medicoExtraForm={medicoExtraForm}
+                setMedicoExtraForm={setMedicoExtraForm}
+                guardarHorasExtraMedico={guardarHorasExtraMedico}
+              />
+            </>
+          )}
+
+          {medicoView === VIEWS_MEDICO.SOLICITUDES && (
+            <SolicitudesMedico
+              medicoActivo={medicoActivo}
+              medicos={medicos}
+              diasProp={diasProp}
+              getTurnosDia={getTurnosDia}
+              solCambioForm={solCambioForm}
+              setSolCambioForm={setSolCambioForm}
+              solCesionForm={solCesionForm}
+              setSolCesionForm={setSolCesionForm}
+              solHorarioForm={solHorarioForm}
+              setSolHorarioForm={setSolHorarioForm}
+              enviarSolicitudCambioTurno={enviarSolicitudCambioTurno}
+              enviarSolicitudCesionTurno={enviarSolicitudCesionTurno}
+              enviarSolicitudHorario={enviarSolicitudHorario}
+              solicitudesCambioTurno={solicitudesCambioTurno}
+              solicitudesCesionTurno={solicitudesCesionTurno}
+              solicHorario={solicHorario}
+              getMedicoNombre={getMedicoNombre}
+            />
+          )}
         </div>
       </div>
     );
@@ -1664,6 +1824,20 @@ export default function App() {
         </nav>
 
         <div className="tm-sidebar-bottom" style={S.sidebarBottom}>
+          {medicoActivo && (usuarioSesion?.es_medico || usuarioSesion?.rol === "coordinador") && (
+            <button
+              type="button"
+              onClick={() => {
+                setMedicoView(VIEWS_MEDICO.HORARIO);
+                localStorage.setItem("pantalla", PANTALLAS.MEDICO);
+                setPantalla(PANTALLAS.MEDICO);
+              }}
+              style={S.sideSecondary}
+            >
+              🩺 Ir a mi vista médica
+            </button>
+          )}
+
           <button type="button" onClick={logout} style={S.sideLogout}>
             ← Cerrar sesión
           </button>
@@ -1747,6 +1921,7 @@ export default function App() {
             crearUsuarioMedico={crearUsuarioMedico}
             crearAdministrador={crearAdministrador}
             resetearPasswordUsuario={resetearPasswordUsuario}
+            eliminarAdministrador={eliminarAdministrador}
             getUsuarioMedico={getUsuarioMedico}
             horasMes={horasMes}
             salarioMes={salarioMes}
@@ -2081,6 +2256,64 @@ function MedicoCalendarioCompacto({
           );
         })}
       </div>
+    </div>
+  );
+}
+
+function HorasExtraMedico({ medicoExtraForm, setMedicoExtraForm, guardarHorasExtraMedico }) {
+  return (
+    <div className="tm-card" style={{ ...S.card, marginTop: 18 }}>
+      <div style={S.cardHeaderBetween}>
+        <div>
+          <div style={S.secTitle}>➕ Solicitud de horas extra de fin de semana</div>
+          <div style={S.solicitudSub}>
+            Reporta las horas adicionales realizadas únicamente en sábado o domingo.
+          </div>
+        </div>
+      </div>
+
+      <div className="tm-grid3" style={S.grid3}>
+        <FieldDate
+          label="Fecha sábado/domingo"
+          value={medicoExtraForm.fecha}
+          onChange={(e) =>
+            setMedicoExtraForm((p) => ({ ...p, fecha: e.target.value }))
+          }
+        />
+
+        <Campo label="Horas adicionales">
+          <input
+            type="number"
+            min="0"
+            step="0.5"
+            value={medicoExtraForm.horas}
+            onChange={(e) =>
+              setMedicoExtraForm((p) => ({ ...p, horas: e.target.value }))
+            }
+            style={inputStyle(false)}
+            placeholder="Ejemplo: 2"
+          />
+        </Campo>
+
+        <Campo label="Motivo / observación">
+          <input
+            value={medicoExtraForm.motivo}
+            onChange={(e) =>
+              setMedicoExtraForm((p) => ({ ...p, motivo: e.target.value }))
+            }
+            style={inputStyle(false)}
+            placeholder="Ejemplo: apoyo adicional en ronda"
+          />
+        </Campo>
+      </div>
+
+      <button
+        type="button"
+        onClick={guardarHorasExtraMedico}
+        style={{ ...S.primaryButton, marginTop: 12 }}
+      >
+        Enviar horas extra
+      </button>
     </div>
   );
 }
@@ -2871,11 +3104,13 @@ function VistaCalendario({
                             >
                               <option value="">＋</option>
 
-                              {Object.keys(TIPOS_TURNO).map((k) => (
-                                <option key={k} value={k}>
-                                  {TIPOS_TURNO[k].emoji} {TIPOS_TURNO[k].label}
-                                </option>
-                              ))}
+                              {Object.keys(TIPOS_TURNO)
+                                .filter((k) => k !== "FDS" || esFin)
+                                .map((k) => (
+                                  <option key={k} value={k}>
+                                    {TIPOS_TURNO[k].emoji} {TIPOS_TURNO[k].label}
+                                  </option>
+                                ))}
                             </select>
                           </div>
 
@@ -2906,6 +3141,7 @@ function VistaMedicos({
   crearUsuarioMedico,
   crearAdministrador,
   resetearPasswordUsuario,
+  eliminarAdministrador,
   getUsuarioMedico,
   horasMes,
   salarioMes,
@@ -3003,6 +3239,13 @@ function VistaMedicos({
                 <span>{u.nombre || u.username}</span>
                 <span>Cédula {u.cedula || "sin cédula"}</span>
                 <span>{u.rol}</span>
+                <button
+                  type="button"
+                  onClick={() => eliminarAdministrador(u.id)}
+                  style={S.adminDeleteBtn}
+                >
+                  Eliminar
+                </button>
               </div>
             ))}
           </div>
@@ -3668,6 +3911,27 @@ const S = {
     marginBottom: 18,
   },
 
+  medicoTopTabs: {
+    display: "flex",
+    gap: 8,
+    flexWrap: "wrap",
+    background: "#0b1528",
+    border: "1px solid #1e293b",
+    borderRadius: 14,
+    padding: 6,
+    marginBottom: 22,
+  },
+
+  medicoTab: (active) => ({
+    background: active ? "#2563eb" : "#111827",
+    color: active ? "#fff" : "#94a3b8",
+    border: `1px solid ${active ? "#3b82f6" : "#1f2937"}`,
+    borderRadius: 10,
+    padding: "10px 14px",
+    fontWeight: 900,
+    cursor: "pointer",
+  }),
+
   bnav: {
     background: "#0b1528",
     border: "1px solid #1e293b",
@@ -4134,8 +4398,20 @@ const S = {
     fontSize: 12,
     display: "flex",
     justifyContent: "space-between",
+    alignItems: "center",
     gap: 10,
     flexWrap: "wrap",
+  },
+
+  adminDeleteBtn: {
+    background: "#450a0a",
+    border: "1px solid #7f1d1d",
+    color: "#fecaca",
+    borderRadius: 8,
+    padding: "6px 9px",
+    cursor: "pointer",
+    fontSize: 11,
+    fontWeight: 900,
   },
 
   infoRows: {
