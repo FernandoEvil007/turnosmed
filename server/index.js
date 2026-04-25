@@ -456,6 +456,35 @@ function isTipoTurnoValido(tipo) {
   return TIPOS_TURNO_VALIDOS.includes(cleanText(tipo));
 }
 
+function normalizeSolicitudCambio(row) {
+  if (!row) return null;
+
+  return {
+    ...row,
+    medico_solicitante_id: row.medico_solicitante_id || row.medico_id,
+    medico_destino_id: row.medico_destino_id || row.medico_receptor_id,
+    fecha_origen: row.fecha_origen || row.fecha_solicitante,
+    tipo_turno_origen:
+      row.tipo_turno_origen || row.tipo_turno_solicitante || row.turno_solicitante,
+    fecha_destino: row.fecha_destino || row.fecha_receptor,
+    tipo_turno_destino:
+      row.tipo_turno_destino || row.tipo_turno_receptor || row.turno_destino,
+  };
+}
+
+function normalizeSolicitudCesion(row) {
+  if (!row) return null;
+
+  return {
+    ...row,
+    medico_solicitante_id: row.medico_solicitante_id || row.medico_id,
+    medico_receptor_id: row.medico_receptor_id || row.medico_destino_id,
+    fecha: row.fecha || row.fecha_turno || row.fecha_origen || row.fecha_solicitante,
+    tipo_turno:
+      row.tipo_turno || row.turno || row.tipo_turno_origen || row.tipo_turno_solicitante,
+  };
+}
+
 function publicUser(row) {
   if (!row) return null;
 
@@ -1934,10 +1963,10 @@ app.put("/solicitudes-cambio-turno/:id/aprobar", requireAdmin, async (req, res) 
 
     const id = Number(req.params.id);
 
-    const solicitud = await get(
+    const solicitud = normalizeSolicitudCambio(await get(
       "SELECT * FROM solicitudes_cambio_turno WHERE id = ?",
       [id]
-    );
+    ));
 
     if (!solicitud) {
       return fail(res, new Error("Solicitud no encontrada"), 404);
@@ -1945,6 +1974,60 @@ app.put("/solicitudes-cambio-turno/:id/aprobar", requireAdmin, async (req, res) 
 
     if (solicitud.estado !== "pendiente") {
       return fail(res, new Error("Esta solicitud ya fue gestionada"), 400);
+    }
+
+    const conflictoSolicitante = await get(
+      `
+      SELECT id
+      FROM turnos
+      WHERE medico_id = ?
+        AND fecha = ?
+        AND tipo_turno = ?
+        AND NOT (medico_id = ? AND fecha = ? AND tipo_turno = ?)
+      `,
+      [
+        solicitud.medico_solicitante_id,
+        solicitud.fecha_destino,
+        solicitud.tipo_turno_destino,
+        solicitud.medico_destino_id,
+        solicitud.fecha_destino,
+        solicitud.tipo_turno_destino,
+      ]
+    );
+
+    if (conflictoSolicitante) {
+      return fail(
+        res,
+        new Error("No se puede aprobar: el solicitante ya tiene ese turno en la fecha destino"),
+        400
+      );
+    }
+
+    const conflictoDestino = await get(
+      `
+      SELECT id
+      FROM turnos
+      WHERE medico_id = ?
+        AND fecha = ?
+        AND tipo_turno = ?
+        AND NOT (medico_id = ? AND fecha = ? AND tipo_turno = ?)
+      `,
+      [
+        solicitud.medico_destino_id,
+        solicitud.fecha_origen,
+        solicitud.tipo_turno_origen,
+        solicitud.medico_solicitante_id,
+        solicitud.fecha_origen,
+        solicitud.tipo_turno_origen,
+      ]
+    );
+
+    if (conflictoDestino) {
+      return fail(
+        res,
+        new Error("No se puede aprobar: el medico destino ya tiene ese turno en la fecha origen"),
+        400
+      );
     }
 
     await run("BEGIN TRANSACTION");
@@ -2194,10 +2277,10 @@ app.put("/solicitudes-cesion-turno/:id/aprobar", requireAdmin, async (req, res) 
 
     const id = Number(req.params.id);
 
-    const solicitud = await get(
+    const solicitud = normalizeSolicitudCesion(await get(
       "SELECT * FROM solicitudes_cesion_turno WHERE id = ?",
       [id]
-    );
+    ));
 
     if (!solicitud) {
       return fail(res, new Error("Solicitud no encontrada"), 404);
@@ -2205,6 +2288,25 @@ app.put("/solicitudes-cesion-turno/:id/aprobar", requireAdmin, async (req, res) 
 
     if (solicitud.estado !== "pendiente") {
       return fail(res, new Error("Esta solicitud ya fue gestionada"), 400);
+    }
+
+    const conflictoReceptor = await get(
+      `
+      SELECT id
+      FROM turnos
+      WHERE medico_id = ?
+        AND fecha = ?
+        AND tipo_turno = ?
+      `,
+      [solicitud.medico_receptor_id, solicitud.fecha, solicitud.tipo_turno]
+    );
+
+    if (conflictoReceptor) {
+      return fail(
+        res,
+        new Error("No se puede aprobar: el medico receptor ya tiene ese turno"),
+        400
+      );
     }
 
     await run("BEGIN TRANSACTION");
