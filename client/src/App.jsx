@@ -307,10 +307,6 @@ function pisoMedicoLabel(medico) {
 function puedeAgregarTurno(tiposActuales = [], tipoNuevo, fecha = "") {
   const tipos = turnosDiaOrdenados(tiposActuales);
 
-  if (tipoNuevo === "FDS" && !esFechaFinSemana(fecha)) {
-    return { ok: false, msg: "El turno Fin de Semana solo se puede asignar sábado o domingo" };
-  }
-
   if (tipos.includes(tipoNuevo)) {
     return { ok: false, msg: "Ese turno ya está cargado en ese día" };
   }
@@ -2435,11 +2431,15 @@ function SolicitudesMedico({
   }, [diasProp, medicoActivo, getTurnosDia]);
 
   const medicosDestino = medicos.filter((m) => Number(m.id) !== Number(medicoActivo.id));
+  const origenCambio = parseTurnoValue(solCambioForm.turno_origen);
+  const origenCesion = parseTurnoValue(solCesionForm.turno_origen);
+  const medicoTieneTurno = (medicoId, fecha, tipo) =>
+    !!fecha && !!tipo && getTurnosDia(medicoId, fecha).includes(tipo);
 
   const turnosMedicoDestino = useMemo(() => {
     const medicoId = Number(solCambioForm.medico_destino_id);
 
-    if (!medicoId) return [];
+    if (!medicoId || !origenCambio.fecha || !origenCambio.tipo) return [];
 
     const arr = [];
 
@@ -2448,6 +2448,16 @@ function SolicitudesMedico({
       const tipos = turnosDiaOrdenados(getTurnosDia(medicoId, fecha));
 
       tipos.forEach((tipo) => {
+        const mismoTipo = tipo === origenCambio.tipo;
+        const solicitantePuedeRecibir = !medicoTieneTurno(medicoActivo.id, fecha, tipo);
+        const destinoPuedeRecibir = !medicoTieneTurno(
+          medicoId,
+          origenCambio.fecha,
+          origenCambio.tipo
+        );
+
+        if (!mismoTipo || !solicitantePuedeRecibir || !destinoPuedeRecibir) return;
+
         arr.push({
           value: buildTurnoValue(fecha, tipo),
           label: `${fechaBonita(fecha)} · ${TIPOS_TURNO[tipo].emoji} ${TIPOS_TURNO[tipo].label}`,
@@ -2456,7 +2466,19 @@ function SolicitudesMedico({
     });
 
     return arr;
-  }, [solCambioForm.medico_destino_id, diasProp, getTurnosDia]);
+  }, [
+    solCambioForm.medico_destino_id,
+    origenCambio.fecha,
+    origenCambio.tipo,
+    diasProp,
+    getTurnosDia,
+    medicoActivo.id,
+  ]);
+
+  const medicosReceptoresCompatibles = medicosDestino.filter((m) => {
+    if (!origenCesion.fecha || !origenCesion.tipo) return false;
+    return !medicoTieneTurno(m.id, origenCesion.fecha, origenCesion.tipo);
+  });
 
   const next = getNextMonthInfo();
   const disponibleHorario = estaEnUltimos7DiasDelMes();
@@ -2503,7 +2525,11 @@ function SolicitudesMedico({
               label="Mi turno"
               value={solCambioForm.turno_origen}
               onChange={(e) =>
-                setSolCambioForm((p) => ({ ...p, turno_origen: e.target.value }))
+                setSolCambioForm((p) => ({
+                  ...p,
+                  turno_origen: e.target.value,
+                  turno_destino: "",
+                }))
               }
               options={[
                 {
@@ -2544,9 +2570,11 @@ function SolicitudesMedico({
               {
                 value: "",
                 label: solCambioForm.medico_destino_id
-                  ? turnosMedicoDestino.length
+                  ? !solCambioForm.turno_origen
+                    ? "Seleccione primero su turno"
+                    : turnosMedicoDestino.length
                     ? "— Seleccione turno —"
-                    : "Ese médico no tiene turnos este mes"
+                    : "No hay turnos compatibles"
                   : "Seleccione primero un médico",
               },
               ...turnosMedicoDestino,
@@ -2591,7 +2619,11 @@ function SolicitudesMedico({
               label="Turno que deseo ceder"
               value={solCesionForm.turno_origen}
               onChange={(e) =>
-                setSolCesionForm((p) => ({ ...p, turno_origen: e.target.value }))
+                setSolCesionForm((p) => ({
+                  ...p,
+                  turno_origen: e.target.value,
+                  medico_receptor_id: "",
+                }))
               }
               options={[
                 {
@@ -2609,8 +2641,15 @@ function SolicitudesMedico({
                 setSolCesionForm((p) => ({ ...p, medico_receptor_id: e.target.value }))
               }
               options={[
-                { value: "", label: "— Seleccione —" },
-                ...medicosDestino.map((m) => ({
+                {
+                  value: "",
+                  label: solCesionForm.turno_origen
+                    ? medicosReceptoresCompatibles.length
+                      ? "— Seleccione —"
+                      : "No hay receptores compatibles"
+                    : "Seleccione primero el turno",
+                },
+                ...medicosReceptoresCompatibles.map((m) => ({
                   value: m.id,
                   label: `${m.nombre} ${m.apellido}`,
                 })),
@@ -3331,7 +3370,6 @@ function VistaCalendario({
                               <option value="">＋</option>
 
                               {Object.keys(TIPOS_TURNO)
-                                .filter((k) => k !== "FDS" || esFin)
                                 .map((k) => (
                                   <option key={k} value={k}>
                                     {TIPOS_TURNO[k].emoji} {TIPOS_TURNO[k].label}
@@ -3440,7 +3478,6 @@ function CalendarioMedicoCoordinador({
 
               <div style={S.coordDayActions}>
                 {Object.keys(TIPOS_TURNO)
-                  .filter((tipo) => tipo !== "FDS" || esFin)
                   .map((tipo) => {
                     const disabled = tipos.includes(tipo);
 

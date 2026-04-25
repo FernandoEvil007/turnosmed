@@ -1894,6 +1894,10 @@ app.post("/solicitudes-cambio-turno", requireAuth, async (req, res) => {
       return fail(res, new Error("Tipo de turno invÃ¡lido"), 400);
     }
 
+    if (tipo_turno_origen !== tipo_turno_destino) {
+      return fail(res, new Error("Solo se pueden cambiar turnos del mismo tipo"), 400);
+    }
+
     const turnoOrigen = await get(
       `
       SELECT *
@@ -1922,6 +1926,36 @@ app.post("/solicitudes-cambio-turno", requireAuth, async (req, res) => {
 
     if (!turnoDestino) {
       return fail(res, new Error("El turno destino no existe"), 400);
+    }
+
+    const solicitanteYaTieneDestino = await get(
+      `
+      SELECT id
+      FROM turnos
+      WHERE medico_id = ?
+        AND fecha = ?
+        AND tipo_turno = ?
+      `,
+      [medico_solicitante_id, fecha_destino, tipo_turno_destino]
+    );
+
+    if (solicitanteYaTieneDestino) {
+      return fail(res, new Error("Ya tienes ese turno en la fecha destino"), 400);
+    }
+
+    const destinoYaTieneOrigen = await get(
+      `
+      SELECT id
+      FROM turnos
+      WHERE medico_id = ?
+        AND fecha = ?
+        AND tipo_turno = ?
+      `,
+      [medico_destino_id, fecha_origen, tipo_turno_origen]
+    );
+
+    if (destinoYaTieneOrigen) {
+      return fail(res, new Error("El medico destino ya tiene ese turno en tu fecha"), 400);
     }
 
     const result = await insertDynamic("solicitudes_cambio_turno", {
@@ -2237,6 +2271,21 @@ app.post("/solicitudes-cesion-turno", requireAuth, async (req, res) => {
 
     if (!receptor) {
       return fail(res, new Error("El mÃ©dico receptor no existe"), 400);
+    }
+
+    const turnoReceptorExistente = await get(
+      `
+      SELECT id
+      FROM turnos
+      WHERE medico_id = ?
+        AND fecha = ?
+        AND tipo_turno = ?
+      `,
+      [medico_receptor_id, fecha, tipo_turno]
+    );
+
+    if (turnoReceptorExistente) {
+      return fail(res, new Error("El medico receptor ya tiene ese turno"), 400);
     }
 
     const result = await insertDynamic("solicitudes_cesion_turno", {
