@@ -103,6 +103,29 @@ async function hasColumn(table, column) {
   return columns.some((c) => c.name === column);
 }
 
+async function insertDynamic(table, valuesByColumn) {
+  const columnsInfo = await all(`PRAGMA table_info(${table})`);
+  const available = new Set(columnsInfo.map((c) => c.name));
+  const columns = Object.keys(valuesByColumn).filter((column) => available.has(column));
+
+  if (!columns.length) {
+    throw new Error(`No hay columnas compatibles para insertar en ${table}`);
+  }
+
+  const placeholders = columns.map(() => "?");
+  const params = columns.map((column) => valuesByColumn[column]);
+
+  return run(
+    `
+    INSERT INTO ${table} (
+      ${columns.join(", ")}
+    )
+    VALUES (${placeholders.join(", ")})
+    `,
+    params
+  );
+}
+
 async function ensureIndex(name, sql) {
   try {
     await run(`CREATE INDEX IF NOT EXISTS ${name} ${sql}`);
@@ -1872,33 +1895,27 @@ app.post("/solicitudes-cambio-turno", requireAuth, async (req, res) => {
       return fail(res, new Error("El turno destino no existe"), 400);
     }
 
-    const result = await run(
-      `
-      INSERT INTO solicitudes_cambio_turno (
-        medico_solicitante_id,
-        medico_destino_id,
-        fecha_origen,
-        tipo_turno_origen,
-        fecha_destino,
-        tipo_turno_destino,
-        mensaje,
-        estado,
-        updated_at
-      )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `,
-      [
-        medico_solicitante_id,
-        medico_destino_id,
-        fecha_origen,
-        tipo_turno_origen,
-        fecha_destino,
-        tipo_turno_destino,
-        mensaje,
-        estado,
-        fechaActualSql(),
-      ]
-    );
+    const result = await insertDynamic("solicitudes_cambio_turno", {
+      medico_solicitante_id,
+      medico_id: medico_solicitante_id,
+      medico_destino_id,
+      medico_receptor_id: medico_destino_id,
+      fecha_origen,
+      fecha_solicitante: fecha_origen,
+      fecha_destino,
+      fecha_receptor: fecha_destino,
+      tipo_turno_origen,
+      tipo_turno_solicitante: tipo_turno_origen,
+      turno_solicitante: tipo_turno_origen,
+      tipo_turno_destino,
+      tipo_turno_receptor: tipo_turno_destino,
+      turno_destino: tipo_turno_destino,
+      mensaje,
+      estado,
+      fecha_solicitud: fechaActualSql(),
+      created_at: fechaActualSql(),
+      updated_at: fechaActualSql(),
+    });
 
     const row = await get(
       "SELECT * FROM solicitudes_cambio_turno WHERE id = ?",
@@ -2139,29 +2156,24 @@ app.post("/solicitudes-cesion-turno", requireAuth, async (req, res) => {
       return fail(res, new Error("El mÃ©dico receptor no existe"), 400);
     }
 
-    const result = await run(
-      `
-      INSERT INTO solicitudes_cesion_turno (
-        medico_solicitante_id,
-        medico_receptor_id,
-        fecha,
-        tipo_turno,
-        mensaje,
-        estado,
-        updated_at
-      )
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-      `,
-      [
-        medico_solicitante_id,
-        medico_receptor_id,
-        fecha,
-        tipo_turno,
-        mensaje,
-        estado,
-        fechaActualSql(),
-      ]
-    );
+    const result = await insertDynamic("solicitudes_cesion_turno", {
+      medico_solicitante_id,
+      medico_id: medico_solicitante_id,
+      medico_receptor_id,
+      medico_destino_id: medico_receptor_id,
+      fecha,
+      fecha_solicitante: fecha,
+      fecha_origen: fecha,
+      tipo_turno,
+      tipo_turno_solicitante: tipo_turno,
+      tipo_turno_origen: tipo_turno,
+      turno_solicitante: tipo_turno,
+      mensaje,
+      estado,
+      fecha_solicitud: fechaActualSql(),
+      created_at: fechaActualSql(),
+      updated_at: fechaActualSql(),
+    });
 
     const row = await get(
       "SELECT * FROM solicitudes_cesion_turno WHERE id = ?",
@@ -2350,29 +2362,19 @@ app.post("/solicitudes-horario", requireAuth, async (req, res) => {
       return fail(res, new Error("MÃ©dico no encontrado"), 404);
     }
 
-    const result = await run(
-      `
-      INSERT INTO solicitudes_horario (
-        medico_id,
-        year,
-        mes,
-        mes_programacion,
-        mensaje,
-        estado,
-        updated_at
-      )
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-      `,
-      [
-        medico_id,
-        year,
-        mes,
-        mes_programacion,
-        mensaje,
-        estado,
-        fechaActualSql(),
-      ]
-    );
+    const result = await insertDynamic("solicitudes_horario", {
+      medico_id,
+      medico_solicitante_id: medico_id,
+      year,
+      anio: year,
+      mes,
+      mes_programacion,
+      mensaje,
+      estado,
+      fecha_solicitud: fechaActualSql(),
+      created_at: fechaActualSql(),
+      updated_at: fechaActualSql(),
+    });
 
     const row = await get("SELECT * FROM solicitudes_horario WHERE id = ?", [
       result.id,
