@@ -163,6 +163,27 @@ async function ensureSolicitudesSchema() {
   await ensureColumn("solicitudes_horario", "estado", "TEXT DEFAULT 'pendiente'");
   await ensureColumn("solicitudes_horario", "fecha_solicitud", "TEXT DEFAULT CURRENT_TIMESTAMP");
   await ensureColumn("solicitudes_horario", "updated_at", "TEXT");
+
+  await run(`
+    CREATE TABLE IF NOT EXISTS solicitudes_horas_extra (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      medico_id INTEGER NOT NULL,
+      fecha TEXT NOT NULL,
+      horas REAL NOT NULL,
+      motivo TEXT,
+      estado TEXT DEFAULT 'pendiente',
+      fecha_solicitud TEXT DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT
+    )
+  `);
+
+  await ensureColumn("solicitudes_horas_extra", "medico_id", "INTEGER");
+  await ensureColumn("solicitudes_horas_extra", "fecha", "TEXT");
+  await ensureColumn("solicitudes_horas_extra", "horas", "REAL");
+  await ensureColumn("solicitudes_horas_extra", "motivo", "TEXT");
+  await ensureColumn("solicitudes_horas_extra", "estado", "TEXT DEFAULT 'pendiente'");
+  await ensureColumn("solicitudes_horas_extra", "fecha_solicitud", "TEXT DEFAULT CURRENT_TIMESTAMP");
+  await ensureColumn("solicitudes_horas_extra", "updated_at", "TEXT");
 }
 
 async function ensurePacientesCargoSchema() {
@@ -928,6 +949,11 @@ async function initDB() {
   await ensureIndex(
     "idx_solicitudes_horario_estado",
     "ON solicitudes_horario(estado)"
+  );
+
+  await ensureIndex(
+    "idx_solicitudes_horas_extra_estado",
+    "ON solicitudes_horas_extra(estado)"
   );
 
   await ensureIndex(
@@ -1921,7 +1947,7 @@ app.get("/horas-adicionales", async (req, res) => {
   }
 });
 
-app.post("/horas-adicionales", requireAuth, async (req, res) => {
+app.post("/horas-adicionales", requireAdmin, async (req, res) => {
   try {
     const medico_id = Number(req.body.medico_id);
     const fecha = cleanText(req.body.fecha);
@@ -1987,6 +2013,207 @@ app.post("/horas-adicionales", requireAuth, async (req, res) => {
       `,
       [medico_id, fecha]
     );
+
+    return ok(res, row);
+  } catch (error) {
+    return fail(res, error);
+  }
+});
+
+async function guardarHorasAdicionalesAprobadas({ medico_id, fecha, horas, motivo }) {
+  const existente = await get(
+    `
+    SELECT *
+    FROM horas_adicionales
+    WHERE medico_id = ?
+      AND fecha = ?
+    `,
+    [medico_id, fecha]
+  );
+
+  if (existente) {
+    await run(
+      `
+      UPDATE horas_adicionales
+      SET horas = ?,
+          motivo = ?,
+          updated_at = ?
+      WHERE medico_id = ?
+        AND fecha = ?
+      `,
+      [horas, motivo, fechaActualSql(), medico_id, fecha]
+    );
+  } else {
+    await run(
+      `
+      INSERT INTO horas_adicionales (
+        medico_id,
+        fecha,
+        horas,
+        motivo,
+        updated_at
+      )
+      VALUES (?, ?, ?, ?, ?)
+      `,
+      [medico_id, fecha, horas, motivo, fechaActualSql()]
+    );
+  }
+}
+
+/* ============================================================================
+   SOLICITUDES HORAS EXTRA
+============================================================================ */
+app.get("/solicitudes-horas-extra", requireAuth, async (req, res) => {
+  try {
+    await ensureSolicitudesSchema();
+
+    const medicoId = Number(req.auth?.medico_id);
+    const filtroMedico = isAdminRol(req.auth?.rol)
+      ? { where: "", params: [] }
+      : { where: "WHERE medico_id = ?", params: [medicoId] };
+
+    const rows = await all(
+      `
+      SELECT *
+      FROM solicitudes_horas_extra
+      ${filtroMedico.where}
+      ORDER BY datetime(fecha_solicitud) DESC, id DESC
+      `,
+      filtroMedico.params
+    );
+
+    return ok(res, rows);
+  } catch (error) {
+    return fail(res, error);
+  }
+});
+
+app.post("/solicitudes-horas-extra", requireAuth, async (req, res) => {
+  try {
+    await ensureSolicitudesSchema();
+
+    const medico_id = Number(req.body.medico_id || req.auth?.medico_id);
+    const fecha = cleanText(req.body.fecha);
+    const horas = Number(req.body.horas || 0);
+    const motivo = cleanText(req.body.motivo);
+
+    if (!medico_id || !fecha || !motivo) {
+      return fail(res, new Error("Médico, fecha y motivo son obligatorios"), 400);
+    }
+
+    if (!canManageMedico(req, medico_id)) {
+      return fail(res, new Error("No puedes solicitar horas extra a nombre de otro médico"), 403);
+    }
+
+    if (!Number.isFinite(horas) || horas <= 0) {
+      return fail(res, new Error("Horas extra inválidas"), 400);
+    }
+
+    const medico = await get("SELECT id FROM medicos WHERE id = ? AND activo = 1", [medico_id]);
+
+    if (!medico) {
+      return fail(res, new Error("Médico no encontrado"), 404);
+    }
+
+    const result = await run(
+      `
+      INSERT INTO solicitudes_horas_extra (
+        medico_id,
+        fecha,
+        horas,
+        motivo,
+        estado,
+        fecha_solicitud,
+        updated_at
+      )
+      VALUES (?, ?, ?, ?, 'pendiente', ?, ?)
+      `,
+      [medico_id, fecha, horas, motivo, fechaActualSql(), fechaActualSql()]
+    );
+
+    const row = await get("SELECT * FROM solicitudes_horas_extra WHERE id = ?", [result.id]);
+
+    return ok(res, row);
+  } catch (error) {
+    return fail(res, error);
+  }
+});
+
+app.put("/solicitudes-horas-extra/:id/aprobar", requireAdmin, async (req, res) => {
+  try {
+    await ensureSolicitudesSchema();
+
+    const id = Number(req.params.id);
+    const solicitud = await get("SELECT * FROM solicitudes_horas_extra WHERE id = ?", [id]);
+
+    if (!solicitud) {
+      return fail(res, new Error("Solicitud no encontrada"), 404);
+    }
+
+    if (solicitud.estado !== "pendiente") {
+      return fail(res, new Error("Esta solicitud ya fue gestionada"), 400);
+    }
+
+    await run("BEGIN TRANSACTION");
+
+    try {
+      await guardarHorasAdicionalesAprobadas({
+        medico_id: solicitud.medico_id,
+        fecha: solicitud.fecha,
+        horas: Number(solicitud.horas || 0),
+        motivo: solicitud.motivo || "Horas extra aprobadas por coordinación",
+      });
+
+      await run(
+        `
+        UPDATE solicitudes_horas_extra
+        SET estado = 'aprobado',
+            updated_at = ?
+        WHERE id = ?
+        `,
+        [fechaActualSql(), id]
+      );
+
+      await run("COMMIT");
+    } catch (error) {
+      await run("ROLLBACK");
+      throw error;
+    }
+
+    const row = await get("SELECT * FROM solicitudes_horas_extra WHERE id = ?", [id]);
+
+    return ok(res, row);
+  } catch (error) {
+    return fail(res, error);
+  }
+});
+
+app.put("/solicitudes-horas-extra/:id/rechazar", requireAdmin, async (req, res) => {
+  try {
+    await ensureSolicitudesSchema();
+
+    const id = Number(req.params.id);
+    const solicitud = await get("SELECT * FROM solicitudes_horas_extra WHERE id = ?", [id]);
+
+    if (!solicitud) {
+      return fail(res, new Error("Solicitud no encontrada"), 404);
+    }
+
+    if (solicitud.estado !== "pendiente") {
+      return fail(res, new Error("Esta solicitud ya fue gestionada"), 400);
+    }
+
+    await run(
+      `
+      UPDATE solicitudes_horas_extra
+      SET estado = 'rechazado',
+          updated_at = ?
+      WHERE id = ?
+      `,
+      [fechaActualSql(), id]
+    );
+
+    const row = await get("SELECT * FROM solicitudes_horas_extra WHERE id = ?", [id]);
 
     return ok(res, row);
   } catch (error) {

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import "./App.css";
 
 /* ============================================================================
@@ -527,6 +527,7 @@ export default function App() {
   const [solicHorario, setSolicHorario] = useState([]);
   const [solicitudesCambioTurno, setSolicitudesCambioTurno] = useState([]);
   const [solicitudesCesionTurno, setSolicitudesCesionTurno] = useState([]);
+  const [solicitudesHorasExtra, setSolicitudesHorasExtra] = useState([]);
 
   const [tarifaHora, setTarifaHora] = useState(119800);
   const [tarifaHoraInput, setTarifaHoraInput] = useState("119800");
@@ -580,9 +581,10 @@ export default function App() {
     const h = solicHorario.filter((s) => s.estado === ESTADOS.PENDIENTE).length;
     const c = solicitudesCambioTurno.filter((s) => s.estado === ESTADOS.PENDIENTE).length;
     const ce = solicitudesCesionTurno.filter((s) => s.estado === ESTADOS.PENDIENTE).length;
+    const he = solicitudesHorasExtra.filter((s) => s.estado === ESTADOS.PENDIENTE).length;
 
-    return h + c + ce;
-  }, [solicHorario, solicitudesCambioTurno, solicitudesCesionTurno]);
+    return h + c + ce + he;
+  }, [solicHorario, solicitudesCambioTurno, solicitudesCesionTurno, solicitudesHorasExtra]);
 
   function showToast(msg, tipo = "ok") {
     setToast({ msg, tipo });
@@ -669,6 +671,15 @@ export default function App() {
     }
   }
 
+  async function cargarSolicitudesHorasExtra() {
+    try {
+      const data = await api("/solicitudes-horas-extra");
+      setSolicitudesHorasExtra(Array.isArray(data) ? data : []);
+    } catch {
+      setSolicitudesHorasExtra([]);
+    }
+  }
+
   async function cargarTarifaHora() {
     try {
       const data = await api("/configuracion/tarifa-hora");
@@ -692,6 +703,7 @@ export default function App() {
         cargarSolicitudesCambio(),
         cargarSolicitudesCesion(),
         cargarSolicitudesHorario(),
+        cargarSolicitudesHorasExtra(),
         cargarTarifaHora(),
       ]);
     } catch (error) {
@@ -823,6 +835,28 @@ export default function App() {
 
   function salarioMes(id, y, m) {
     return horasMes(id, y, m) * tarifaHora;
+  }
+
+  function resumenTurnosMes(id, y, m) {
+    return getDias(y, m).reduce(
+      (acc, d) => {
+        const fecha = isoDate(d);
+        const tipos = getTurnosDia(id, fecha);
+
+        tipos.forEach((tipo) => {
+          if (!acc[tipo]) return;
+          acc[tipo].cantidad += 1;
+          acc[tipo].horas += TIPOS_TURNO[tipo]?.horas || 0;
+        });
+
+        return acc;
+      },
+      {
+        DIA: { cantidad: 0, horas: 0 },
+        CENIZO: { cantidad: 0, horas: 0 },
+        FDS: { cantidad: 0, horas: 0 },
+      }
+    );
   }
 
   function getUsuarioMedico(medicoId) {
@@ -1347,7 +1381,7 @@ export default function App() {
     }
 
     try {
-      await api("/horas-adicionales", {
+      await api("/solicitudes-horas-extra", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -1358,16 +1392,9 @@ export default function App() {
         }),
       });
 
-      setHorasAdicionales((prev) => ({
-        ...prev,
-        [`${medicoActivo.id}_${fecha}`]: {
-          horas,
-          motivo: motivo || "Horas extra reportadas por el médico durante fin de semana",
-        },
-      }));
-
       setMedicoExtraForm(MEDICO_EXTRA_FORM0);
-      showToast("Horas extra de fin de semana enviadas correctamente ✓");
+      await Promise.all([cargarHorasAdicionales(), cargarSolicitudesHorasExtra()]);
+      showToast("Solicitud de horas extra enviada a coordinación");
     } catch (error) {
       console.error(error);
       showToast(error.message || "No se pudieron enviar las horas extra", "err");
@@ -1700,6 +1727,7 @@ export default function App() {
       cambio: `/solicitudes-cambio-turno/${id}/${accion}`,
       cesion: `/solicitudes-cesion-turno/${id}/${accion}`,
       horario: `/solicitudes-horario/${id}/${accion}`,
+      horas_extra: `/solicitudes-horas-extra/${id}/${accion}`,
     };
 
     if (!endpoints[tipo]) return;
@@ -1714,7 +1742,9 @@ export default function App() {
         cargarSolicitudesCambio(),
         cargarSolicitudesCesion(),
         cargarSolicitudesHorario(),
+        cargarSolicitudesHorasExtra(),
         cargarTurnos(),
+        cargarHorasAdicionales(),
       ]);
 
       showToast(
@@ -2041,6 +2071,8 @@ export default function App() {
                 horasDiaTotal={horasDiaTotal}
               />
 
+              <ResumenTurnosMedico resumen={resumenTurnosMes(medicoActivo.id, propYear, propMes)} />
+
               <HorasExtraMedico
                 medicoExtraForm={medicoExtraForm}
                 setMedicoExtraForm={setMedicoExtraForm}
@@ -2066,6 +2098,7 @@ export default function App() {
               enviarSolicitudHorario={enviarSolicitudHorario}
               solicitudesCambioTurno={solicitudesCambioTurno}
               solicitudesCesionTurno={solicitudesCesionTurno}
+              solicitudesHorasExtra={solicitudesHorasExtra}
               solicHorario={solicHorario}
               getMedicoNombre={getMedicoNombre}
             />
@@ -2359,6 +2392,7 @@ export default function App() {
             solicHorario={solicHorario}
             solicitudesCambioTurno={solicitudesCambioTurno}
             solicitudesCesionTurno={solicitudesCesionTurno}
+            solicitudesHorasExtra={solicitudesHorasExtra}
             medicos={medicos}
             getMedicoNombre={getMedicoNombre}
             cambiarEstadoSolicitud={cambiarEstadoSolicitud}
@@ -2960,6 +2994,43 @@ function PacientesCargoMedico({
   );
 }
 
+function ResumenTurnosMedico({ resumen }) {
+  const filas = [
+    { tipo: "DIA", nombre: "Turnos de 8 horas" },
+    { tipo: "CENIZO", nombre: "Cenizos de 3 horas" },
+    { tipo: "FDS", nombre: "Fines de semana" },
+  ];
+
+  return (
+    <div className="tm-card" style={S.card}>
+      <div style={S.secTitle}>Resumen de turnos del mes</div>
+
+      <div style={S.summaryTable}>
+        <div style={S.summaryHead}>Tipo</div>
+        <div style={S.summaryHead}>Cantidad</div>
+        <div style={S.summaryHead}>Horas base</div>
+
+        {filas.map((fila) => {
+          const tipo = TIPOS_TURNO[fila.tipo];
+          const data = resumen?.[fila.tipo] || { cantidad: 0, horas: 0 };
+
+          return (
+            <Fragment key={fila.tipo}>
+              <div style={S.summaryCell}>
+                <span style={S.turnoChip(tipo)}>
+                  {tipo.emoji} {fila.nombre}
+                </span>
+              </div>
+              <div style={S.summaryCell}>{data.cantidad}</div>
+              <div style={S.summaryCell}>{data.horas}h</div>
+            </Fragment>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function DatosRegistroForm({
   datosRegistroForm,
   setDatosRegistroForm,
@@ -3276,6 +3347,7 @@ function SolicitudesMedico({
   enviarSolicitudHorario,
   solicitudesCambioTurno,
   solicitudesCesionTurno,
+  solicitudesHorasExtra,
   solicHorario,
   getMedicoNombre,
 }) {
@@ -3372,6 +3444,11 @@ function SolicitudesMedico({
 
   const misHorarios = solicHorario
     .filter((s) => Number(s.medico_id || s.medico_solicitante_id) === Number(medicoActivo.id))
+    .slice(-4)
+    .reverse();
+
+  const misHorasExtra = solicitudesHorasExtra
+    .filter((s) => Number(s.medico_id) === Number(medicoActivo.id))
     .slice(-4)
     .reverse();
 
@@ -3608,7 +3685,7 @@ function SolicitudesMedico({
       <div style={S.historialSolicitudes}>
         <div style={S.solicitudTitle}>📌 Mis últimas solicitudes</div>
 
-        {[...misCambios, ...misCesiones, ...misHorarios].length === 0 && (
+        {[...misCambios, ...misCesiones, ...misHorarios, ...misHorasExtra].length === 0 && (
           <div style={S.emptyCard}>Aún no tienes solicitudes registradas.</div>
         )}
 
@@ -3644,6 +3721,16 @@ function SolicitudesMedico({
               title="Solicitud de horario"
               estado={s.estado}
               text={`Programación mes ${s.mes || s.mes_programacion || ""}`}
+            />
+          ))}
+
+          {misHorasExtra.map((s) => (
+            <MiniSolicitud
+              key={`horas-extra-${s.id}`}
+              icon="+"
+              title="Horas extra"
+              estado={s.estado}
+              text={`${fechaBonita(s.fecha)} · ${Number(s.horas || 0)}h`}
             />
           ))}
         </div>
@@ -4718,6 +4805,7 @@ function VistaSolicitudes({
   solicHorario,
   solicitudesCambioTurno,
   solicitudesCesionTurno,
+  solicitudesHorasExtra,
   medicos,
   getMedicoNombre,
   cambiarEstadoSolicitud,
@@ -4725,6 +4813,7 @@ function VistaSolicitudes({
   const pendientesCambio = solicitudesCambioTurno.filter((s) => s.estado === ESTADOS.PENDIENTE);
   const pendientesCesion = solicitudesCesionTurno.filter((s) => s.estado === ESTADOS.PENDIENTE);
   const pendientesHorario = solicHorario.filter((s) => s.estado === ESTADOS.PENDIENTE);
+  const pendientesHorasExtra = solicitudesHorasExtra.filter((s) => s.estado === ESTADOS.PENDIENTE);
 
   return (
     <section>
@@ -4737,7 +4826,35 @@ function VistaSolicitudes({
         <SolicitudBox title="Cambios pendientes" count={pendientesCambio.length} icon="🔁" />
         <SolicitudBox title="Cesiones pendientes" count={pendientesCesion.length} icon="🤝" />
         <SolicitudBox title="Horarios pendientes" count={pendientesHorario.length} icon="📝" />
+        <SolicitudBox title="Horas extra pendientes" count={pendientesHorasExtra.length} icon="+" />
       </div>
+
+      <SolicitudAdminGrupo
+        titulo="Solicitudes de horas extra"
+        vacio="No hay solicitudes de horas extra registradas."
+        solicitudes={solicitudesHorasExtra}
+        tipo="horas_extra"
+        getMedicoNombre={getMedicoNombre}
+        cambiarEstadoSolicitud={cambiarEstadoSolicitud}
+        renderDetalle={(s) => (
+          <>
+            <div>
+              <b>Médico:</b> {getMedicoNombre(s.medico_id)}
+            </div>
+            <div>
+              <b>Fecha:</b> {fechaBonita(s.fecha)}
+            </div>
+            <div>
+              <b>Horas solicitadas:</b> {Number(s.horas || 0)}h
+            </div>
+            {s.motivo && (
+              <div>
+                <b>Motivo:</b> {s.motivo}
+              </div>
+            )}
+          </>
+        )}
+      />
 
       <SolicitudAdminGrupo
         titulo="🔁 Solicitudes de cambio de turno"
@@ -5259,6 +5376,35 @@ const S = {
     padding: "6px 10px",
     fontSize: 11,
     fontWeight: 900,
+  },
+
+  summaryTable: {
+    display: "grid",
+    gridTemplateColumns: "minmax(160px, 1fr) 110px 120px",
+    gap: 1,
+    background: "#1e293b",
+    border: "1px solid #1e293b",
+    borderRadius: 8,
+    overflow: "hidden",
+    marginTop: 10,
+  },
+
+  summaryHead: {
+    background: "#0b1528",
+    color: "#bfdbfe",
+    padding: "10px 12px",
+    fontSize: 12,
+    fontWeight: 900,
+  },
+
+  summaryCell: {
+    background: "#111827",
+    color: "#e5e7eb",
+    padding: "10px 12px",
+    fontSize: 13,
+    fontWeight: 800,
+    display: "flex",
+    alignItems: "center",
   },
 
   floorCheckGrid: {
