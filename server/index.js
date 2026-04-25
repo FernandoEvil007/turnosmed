@@ -91,6 +91,11 @@ async function ensureColumn(table, column, definition) {
   }
 }
 
+async function hasColumn(table, column) {
+  const columns = await all(`PRAGMA table_info(${table})`);
+  return columns.some((c) => c.name === column);
+}
+
 async function ensureIndex(name, sql) {
   try {
     await run(`CREATE INDEX IF NOT EXISTS ${name} ${sql}`);
@@ -202,15 +207,78 @@ function passwordMatches(storedPassword, plainPassword) {
   return stored === plain;
 }
 
+function getStoredPassword(usuario) {
+  return usuario?.password || usuario?.password_hash || "";
+}
+
 async function maybeUpgradePassword(usuario, plainPassword) {
-  if (!usuario?.id || String(usuario.password || "").startsWith("pbkdf2$")) {
+  const storedPassword = getStoredPassword(usuario);
+
+  if (!usuario?.id || String(storedPassword || "").startsWith("pbkdf2$")) {
     return;
   }
 
-  await run("UPDATE usuarios SET password = ? WHERE id = ?", [
-    hashPassword(plainPassword),
-    usuario.id,
-  ]);
+  await updateUserPassword(usuario.id, plainPassword);
+}
+
+async function updateUserPassword(userId, plainPassword) {
+  const hashed = hashPassword(plainPassword);
+  const sets = [];
+  const params = [];
+
+  if (await hasColumn("usuarios", "password")) {
+    sets.push("password = ?");
+    params.push(hashed);
+  }
+
+  if (await hasColumn("usuarios", "password_hash")) {
+    sets.push("password_hash = ?");
+    params.push(hashed);
+  }
+
+  if (!sets.length) {
+    throw new Error("La tabla usuarios no tiene columna de contraseña");
+  }
+
+  params.push(userId);
+
+  await run(
+    `
+    UPDATE usuarios
+    SET ${sets.join(", ")}
+    WHERE id = ?
+    `,
+    params
+  );
+}
+
+async function insertUsuario({ username, password, rol, medico_id, cedula, nombre }) {
+  const hashed = hashPassword(password);
+  const columns = ["username", "rol", "medico_id", "cedula", "nombre", "activo"];
+  const placeholders = ["?", "?", "?", "?", "?", "1"];
+  const params = [username, rol, medico_id, cedula, nombre];
+
+  if (await hasColumn("usuarios", "password")) {
+    columns.splice(1, 0, "password");
+    placeholders.splice(1, 0, "?");
+    params.splice(1, 0, hashed);
+  }
+
+  if (await hasColumn("usuarios", "password_hash")) {
+    columns.splice(1, 0, "password_hash");
+    placeholders.splice(1, 0, "?");
+    params.splice(1, 0, hashed);
+  }
+
+  return run(
+    `
+    INSERT INTO usuarios (
+      ${columns.join(", ")}
+    )
+    VALUES (${placeholders.join(", ")})
+    `,
+    params
+  );
 }
 
 function buildAuthResponse(usuario, medico = null, overrides = {}) {
@@ -670,7 +738,7 @@ app.post("/login", async (req, res) => {
       [username]
     );
 
-    if (!usuario || !passwordMatches(usuario.password, password)) {
+    if (!usuario || !passwordMatches(getStoredPassword(usuario), password)) {
       return fail(res, new Error("Usuario o contraseÃ±a incorrectos"), 401);
     }
 
@@ -740,7 +808,7 @@ app.post("/login-admin", async (req, res) => {
       [cedula, cedula]
     );
 
-    if (!usuario || !passwordMatches(usuario.password, password)) {
+    if (!usuario || !passwordMatches(getStoredPassword(usuario), password)) {
       return fail(res, new Error("Administrador no vÃ¡lido"), 401);
     }
 
@@ -1113,21 +1181,14 @@ app.post("/usuarios", requireAdmin, async (req, res) => {
       }
     }
 
-    const result = await run(
-      `
-      INSERT INTO usuarios (
-        username,
-        password,
-        rol,
-        medico_id,
-        cedula,
-        nombre,
-        activo
-      )
-      VALUES (?, ?, ?, ?, ?, ?, 1)
-      `,
-      [username, hashPassword(password), rol, medico_id, cedula, nombre]
-    );
+    const result = await insertUsuario({
+      username,
+      password,
+      rol,
+      medico_id,
+      cedula,
+      nombre,
+    });
 
     const usuario = await get(
       `
@@ -1240,14 +1301,7 @@ app.put("/usuarios/:id/reset-password", requireAdmin, async (req, res) => {
       return fail(res, new Error("Usuario y nueva contraseÃ±a son obligatorios"), 400);
     }
 
-    await run(
-      `
-      UPDATE usuarios
-      SET password = ?
-      WHERE id = ?
-      `,
-      [hashPassword(nuevaPassword), id]
-    );
+    await updateUserPassword(id, nuevaPassword);
 
     return ok(res, {
       ok: true,
