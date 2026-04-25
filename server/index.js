@@ -524,6 +524,7 @@ async function initDB() {
   await ensureColumn("medicos", "created_at", "TEXT DEFAULT CURRENT_TIMESTAMP");
 
   await ensureColumn("usuarios", "medico_id", "INTEGER");
+  await ensureColumn("usuarios", "password", "TEXT");
   await ensureColumn("usuarios", "cedula", "TEXT");
   await ensureColumn("usuarios", "nombre", "TEXT");
   await ensureColumn("usuarios", "activo", "INTEGER DEFAULT 1");
