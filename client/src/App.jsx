@@ -484,6 +484,11 @@ export default function App() {
   }
 
   async function cargarUsuarios() {
+    if (!localStorage.getItem("authToken")) {
+      setUsuarios([]);
+      return;
+    }
+
     const data = await api("/usuarios");
     setUsuarios(Array.isArray(data) ? data : []);
   }
@@ -1940,6 +1945,7 @@ export default function App() {
             eliminarAdministrador={eliminarAdministrador}
             getUsuarioMedico={getUsuarioMedico}
             usuarioDisponible={usuarioDisponible}
+            usuarioSesion={usuarioSesion}
             horasMes={horasMes}
             salarioMes={salarioMes}
             year={year}
@@ -3161,6 +3167,7 @@ function VistaMedicos({
   eliminarAdministrador,
   getUsuarioMedico,
   usuarioDisponible,
+  usuarioSesion,
   horasMes,
   salarioMes,
   year,
@@ -3172,6 +3179,9 @@ function VistaMedicos({
 }) {
   const administradores = usuarios.filter(
     (u) => u.rol === "coordinador" || u.rol === "administrador"
+  );
+  const puedeGestionarAdministradores = usuarios.some(
+    (u) => Number(u.id) === Number(usuarioSesion?.id) && u.es_admin_principal
   );
   const medicoTieneAdmin = (medico) =>
     administradores.some(
@@ -3193,6 +3203,7 @@ function VistaMedicos({
         }
       />
 
+      {puedeGestionarAdministradores && (
       <div className="tm-card" style={S.card}>
         <div style={S.secTitle}>Crear otro administrador</div>
 
@@ -3278,6 +3289,7 @@ function VistaMedicos({
           </div>
         </div>
       </div>
+      )}
 
       <div className="tm-card" style={S.card}>
         <div style={S.secTitle}>Crear acceso para médico</div>
