@@ -528,6 +528,7 @@ export default function App() {
   const [solicitudesCambioTurno, setSolicitudesCambioTurno] = useState([]);
   const [solicitudesCesionTurno, setSolicitudesCesionTurno] = useState([]);
   const [solicitudesHorasExtra, setSolicitudesHorasExtra] = useState([]);
+  const [solicitudesCuentaCobro, setSolicitudesCuentaCobro] = useState([]);
 
   const [tarifaHora, setTarifaHora] = useState(119800);
   const [tarifaHoraInput, setTarifaHoraInput] = useState("119800");
@@ -582,9 +583,16 @@ export default function App() {
     const c = solicitudesCambioTurno.filter((s) => s.estado === ESTADOS.PENDIENTE).length;
     const ce = solicitudesCesionTurno.filter((s) => s.estado === ESTADOS.PENDIENTE).length;
     const he = solicitudesHorasExtra.filter((s) => s.estado === ESTADOS.PENDIENTE).length;
+    const cc = solicitudesCuentaCobro.filter((s) => s.estado === ESTADOS.PENDIENTE).length;
 
-    return h + c + ce + he;
-  }, [solicHorario, solicitudesCambioTurno, solicitudesCesionTurno, solicitudesHorasExtra]);
+    return h + c + ce + he + cc;
+  }, [
+    solicHorario,
+    solicitudesCambioTurno,
+    solicitudesCesionTurno,
+    solicitudesHorasExtra,
+    solicitudesCuentaCobro,
+  ]);
 
   function showToast(msg, tipo = "ok") {
     setToast({ msg, tipo });
@@ -680,6 +688,15 @@ export default function App() {
     }
   }
 
+  async function cargarSolicitudesCuentaCobro() {
+    try {
+      const data = await api("/solicitudes-cuenta-cobro");
+      setSolicitudesCuentaCobro(Array.isArray(data) ? data : []);
+    } catch {
+      setSolicitudesCuentaCobro([]);
+    }
+  }
+
   async function cargarTarifaHora() {
     try {
       const data = await api("/configuracion/tarifa-hora");
@@ -704,6 +721,7 @@ export default function App() {
         cargarSolicitudesCesion(),
         cargarSolicitudesHorario(),
         cargarSolicitudesHorasExtra(),
+        cargarSolicitudesCuentaCobro(),
         cargarTarifaHora(),
       ]);
     } catch (error) {
@@ -1570,6 +1588,68 @@ export default function App() {
     }
   }
 
+  async function enviarCuentaCobroCoordinacion() {
+    if (!medicoActivo?.id) {
+      showToast("Sesión médica no válida", "err");
+      return;
+    }
+
+    try {
+      await api("/solicitudes-cuenta-cobro", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          medico_id: medicoActivo.id,
+          year: propYear,
+          mes: propMes + 1,
+          total_horas: horasMes(medicoActivo.id, propYear, propMes),
+        }),
+      });
+
+      await cargarSolicitudesCuentaCobro();
+      showToast("Cuenta de cobro enviada a coordinación");
+    } catch (error) {
+      console.error(error);
+      showToast(error.message || "No se pudo enviar la cuenta de cobro", "err");
+    }
+  }
+
+  async function descargarCuentaCobroAdmin(medicoId, year, mes) {
+    try {
+      const token = localStorage.getItem("authToken");
+      const res = await fetch(`${API_URL}/medicos/${medicoId}/cuenta-cobro?year=${year}&mes=${mes}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+
+      if (!res.ok) {
+        let data = null;
+        try {
+          data = await res.json();
+        } catch {
+          data = null;
+        }
+        throw new Error(data?.error || "No se pudo descargar el Excel");
+      }
+
+      const blob = await res.blob();
+      const disposition = res.headers.get("Content-Disposition") || "";
+      const match = disposition.match(/filename="([^"]+)"/);
+      const filename = match?.[1] || "cuenta_cobro.xlsx";
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error(error);
+      showToast(error.message || "No se pudo descargar el Excel", "err");
+    }
+  }
+
   async function eliminarPacienteCargo(id) {
     try {
       await api(`/pacientes-cargo/${id}`, { method: "DELETE" });
@@ -1777,6 +1857,7 @@ export default function App() {
       cesion: `/solicitudes-cesion-turno/${id}/${accion}`,
       horario: `/solicitudes-horario/${id}/${accion}`,
       horas_extra: `/solicitudes-horas-extra/${id}/${accion}`,
+      cuenta_cobro: `/solicitudes-cuenta-cobro/${id}/${accion}`,
     };
 
     if (!endpoints[tipo]) return;
@@ -1792,6 +1873,7 @@ export default function App() {
         cargarSolicitudesCesion(),
         cargarSolicitudesHorario(),
         cargarSolicitudesHorasExtra(),
+        cargarSolicitudesCuentaCobro(),
         cargarTurnos(),
         cargarHorasAdicionales(),
       ]);
@@ -2123,6 +2205,7 @@ export default function App() {
               <ResumenTurnosMedico
                 resumen={resumenTurnosMes(medicoActivo.id, propYear, propMes)}
                 descargarCuentaCobroMedico={descargarCuentaCobroMedico}
+                enviarCuentaCobroCoordinacion={enviarCuentaCobroCoordinacion}
               />
 
               <HorasExtraMedico
@@ -2151,6 +2234,7 @@ export default function App() {
               solicitudesCambioTurno={solicitudesCambioTurno}
               solicitudesCesionTurno={solicitudesCesionTurno}
               solicitudesHorasExtra={solicitudesHorasExtra}
+              solicitudesCuentaCobro={solicitudesCuentaCobro}
               solicHorario={solicHorario}
               getMedicoNombre={getMedicoNombre}
             />
@@ -2445,9 +2529,11 @@ export default function App() {
             solicitudesCambioTurno={solicitudesCambioTurno}
             solicitudesCesionTurno={solicitudesCesionTurno}
             solicitudesHorasExtra={solicitudesHorasExtra}
+            solicitudesCuentaCobro={solicitudesCuentaCobro}
             medicos={medicos}
             getMedicoNombre={getMedicoNombre}
             cambiarEstadoSolicitud={cambiarEstadoSolicitud}
+            descargarCuentaCobroAdmin={descargarCuentaCobroAdmin}
           />
         )}
       </main>
@@ -3046,7 +3132,11 @@ function PacientesCargoMedico({
   );
 }
 
-function ResumenTurnosMedico({ resumen, descargarCuentaCobroMedico }) {
+function ResumenTurnosMedico({
+  resumen,
+  descargarCuentaCobroMedico,
+  enviarCuentaCobroCoordinacion,
+}) {
   const filas = [
     { tipo: "DIA", nombre: "Turnos de 8 horas" },
     { tipo: "CENIZO", nombre: "Cenizos de 3 horas" },
@@ -3093,13 +3183,15 @@ function ResumenTurnosMedico({ resumen, descargarCuentaCobroMedico }) {
         <div style={{ ...S.summaryCell, ...S.summaryTotalCell }}>{total}h</div>
       </div>
 
-      <button
-        type="button"
-        onClick={descargarCuentaCobroMedico}
-        style={{ ...S.primaryButton, marginTop: 14 }}
-      >
-        Generar cuenta de cobro Excel
-      </button>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 14 }}>
+        <button type="button" onClick={descargarCuentaCobroMedico} style={S.primaryButton}>
+          Generar cuenta de cobro Excel
+        </button>
+
+        <button type="button" onClick={enviarCuentaCobroCoordinacion} style={S.secondaryButton}>
+          Enviar cuenta revisada a coordinación
+        </button>
+      </div>
     </div>
   );
 }
@@ -3421,6 +3513,7 @@ function SolicitudesMedico({
   solicitudesCambioTurno,
   solicitudesCesionTurno,
   solicitudesHorasExtra,
+  solicitudesCuentaCobro,
   solicHorario,
   getMedicoNombre,
 }) {
@@ -3521,6 +3614,11 @@ function SolicitudesMedico({
     .reverse();
 
   const misHorasExtra = solicitudesHorasExtra
+    .filter((s) => Number(s.medico_id) === Number(medicoActivo.id))
+    .slice(-4)
+    .reverse();
+
+  const misCuentasCobro = solicitudesCuentaCobro
     .filter((s) => Number(s.medico_id) === Number(medicoActivo.id))
     .slice(-4)
     .reverse();
@@ -3758,7 +3856,13 @@ function SolicitudesMedico({
       <div style={S.historialSolicitudes}>
         <div style={S.solicitudTitle}>📌 Mis últimas solicitudes</div>
 
-        {[...misCambios, ...misCesiones, ...misHorarios, ...misHorasExtra].length === 0 && (
+        {[
+          ...misCambios,
+          ...misCesiones,
+          ...misHorarios,
+          ...misHorasExtra,
+          ...misCuentasCobro,
+        ].length === 0 && (
           <div style={S.emptyCard}>Aún no tienes solicitudes registradas.</div>
         )}
 
@@ -3804,6 +3908,16 @@ function SolicitudesMedico({
               title="Horas extra"
               estado={s.estado}
               text={`${fechaBonita(s.fecha)} · ${Number(s.horas || 0)}h`}
+            />
+          ))}
+
+          {misCuentasCobro.map((s) => (
+            <MiniSolicitud
+              key={`cuenta-cobro-${s.id}`}
+              icon="$"
+              title="Cuenta de cobro"
+              estado={s.estado}
+              text={`Mes ${s.mes}/${s.year} · ${Number(s.total_horas || 0)}h`}
             />
           ))}
         </div>
@@ -4879,14 +4993,17 @@ function VistaSolicitudes({
   solicitudesCambioTurno,
   solicitudesCesionTurno,
   solicitudesHorasExtra,
+  solicitudesCuentaCobro,
   medicos,
   getMedicoNombre,
   cambiarEstadoSolicitud,
+  descargarCuentaCobroAdmin,
 }) {
   const pendientesCambio = solicitudesCambioTurno.filter((s) => s.estado === ESTADOS.PENDIENTE);
   const pendientesCesion = solicitudesCesionTurno.filter((s) => s.estado === ESTADOS.PENDIENTE);
   const pendientesHorario = solicHorario.filter((s) => s.estado === ESTADOS.PENDIENTE);
   const pendientesHorasExtra = solicitudesHorasExtra.filter((s) => s.estado === ESTADOS.PENDIENTE);
+  const pendientesCuentaCobro = solicitudesCuentaCobro.filter((s) => s.estado === ESTADOS.PENDIENTE);
 
   return (
     <section>
@@ -4900,7 +5017,37 @@ function VistaSolicitudes({
         <SolicitudBox title="Cesiones pendientes" count={pendientesCesion.length} icon="🤝" />
         <SolicitudBox title="Horarios pendientes" count={pendientesHorario.length} icon="📝" />
         <SolicitudBox title="Horas extra pendientes" count={pendientesHorasExtra.length} icon="+" />
+        <SolicitudBox title="Cuentas pendientes" count={pendientesCuentaCobro.length} icon="$" />
       </div>
+
+      <SolicitudAdminGrupo
+        titulo="Cuentas de cobro enviadas"
+        vacio="No hay cuentas de cobro enviadas."
+        solicitudes={solicitudesCuentaCobro}
+        tipo="cuenta_cobro"
+        getMedicoNombre={getMedicoNombre}
+        cambiarEstadoSolicitud={cambiarEstadoSolicitud}
+        renderDetalle={(s) => (
+          <>
+            <div>
+              <b>Médico:</b> {getMedicoNombre(s.medico_id)}
+            </div>
+            <div>
+              <b>Periodo:</b> {s.mes}/{s.year}
+            </div>
+            <div>
+              <b>Total reportado:</b> {Number(s.total_horas || 0)}h
+            </div>
+            <button
+              type="button"
+              onClick={() => descargarCuentaCobroAdmin(s.medico_id, s.year, s.mes)}
+              style={{ ...S.secondaryButton, marginTop: 8 }}
+            >
+              Descargar Excel
+            </button>
+          </>
+        )}
+      />
 
       <SolicitudAdminGrupo
         titulo="Solicitudes de horas extra"
@@ -5251,6 +5398,16 @@ const S = {
     background: "#2563eb",
     color: "#fff",
     border: "none",
+    borderRadius: 9,
+    padding: "10px 14px",
+    fontWeight: 800,
+    cursor: "pointer",
+  },
+
+  secondaryButton: {
+    background: "#111827",
+    color: "#bfdbfe",
+    border: "1px solid #2563eb",
     borderRadius: 9,
     padding: "10px 14px",
     fontWeight: 800,

@@ -186,6 +186,27 @@ async function ensureSolicitudesSchema() {
   await ensureColumn("solicitudes_horas_extra", "estado", "TEXT DEFAULT 'pendiente'");
   await ensureColumn("solicitudes_horas_extra", "fecha_solicitud", "TEXT DEFAULT CURRENT_TIMESTAMP");
   await ensureColumn("solicitudes_horas_extra", "updated_at", "TEXT");
+
+  await run(`
+    CREATE TABLE IF NOT EXISTS solicitudes_cuenta_cobro (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      medico_id INTEGER NOT NULL,
+      year INTEGER NOT NULL,
+      mes INTEGER NOT NULL,
+      total_horas REAL DEFAULT 0,
+      estado TEXT DEFAULT 'pendiente',
+      fecha_solicitud TEXT DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT
+    )
+  `);
+
+  await ensureColumn("solicitudes_cuenta_cobro", "medico_id", "INTEGER");
+  await ensureColumn("solicitudes_cuenta_cobro", "year", "INTEGER");
+  await ensureColumn("solicitudes_cuenta_cobro", "mes", "INTEGER");
+  await ensureColumn("solicitudes_cuenta_cobro", "total_horas", "REAL DEFAULT 0");
+  await ensureColumn("solicitudes_cuenta_cobro", "estado", "TEXT DEFAULT 'pendiente'");
+  await ensureColumn("solicitudes_cuenta_cobro", "fecha_solicitud", "TEXT DEFAULT CURRENT_TIMESTAMP");
+  await ensureColumn("solicitudes_cuenta_cobro", "updated_at", "TEXT");
 }
 
 async function ensurePacientesCargoSchema() {
@@ -995,6 +1016,11 @@ async function initDB() {
   await ensureIndex(
     "idx_solicitudes_horas_extra_estado",
     "ON solicitudes_horas_extra(estado)"
+  );
+
+  await ensureIndex(
+    "idx_solicitudes_cuenta_cobro_estado",
+    "ON solicitudes_cuenta_cobro(estado)"
   );
 
   await ensureIndex(
@@ -2625,6 +2651,164 @@ app.get("/medicos/:id/cuenta-cobro", requireAuth, async (req, res) => {
     res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
 
     return res.send(Buffer.from(buffer));
+  } catch (error) {
+    return fail(res, error);
+  }
+});
+
+/* ============================================================================
+   SOLICITUDES CUENTA DE COBRO
+============================================================================ */
+app.get("/solicitudes-cuenta-cobro", requireAuth, async (req, res) => {
+  try {
+    await ensureSolicitudesSchema();
+
+    const medicoId = Number(req.auth?.medico_id);
+    const filtroMedico = isAdminRol(req.auth?.rol)
+      ? { where: "", params: [] }
+      : { where: "WHERE medico_id = ?", params: [medicoId] };
+
+    const rows = await all(
+      `
+      SELECT *
+      FROM solicitudes_cuenta_cobro
+      ${filtroMedico.where}
+      ORDER BY datetime(fecha_solicitud) DESC, id DESC
+      `,
+      filtroMedico.params
+    );
+
+    return ok(res, rows);
+  } catch (error) {
+    return fail(res, error);
+  }
+});
+
+app.post("/solicitudes-cuenta-cobro", requireAuth, async (req, res) => {
+  try {
+    await ensureSolicitudesSchema();
+
+    const medico_id = Number(req.body.medico_id || req.auth?.medico_id);
+    const year = Number(req.body.year);
+    const mes = Number(req.body.mes || req.body.month);
+    const total_horas = Number(req.body.total_horas || req.body.totalHoras || 0);
+
+    if (!medico_id || !year || !mes || mes < 1 || mes > 12) {
+      return fail(res, new Error("Médico, año y mes son obligatorios"), 400);
+    }
+
+    if (!canManageMedico(req, medico_id)) {
+      return fail(res, new Error("No puedes enviar cuenta de cobro de otro médico"), 403);
+    }
+
+    const medico = await get("SELECT id FROM medicos WHERE id = ? AND activo = 1", [medico_id]);
+
+    if (!medico) {
+      return fail(res, new Error("Médico no encontrado"), 404);
+    }
+
+    const pendiente = await get(
+      `
+      SELECT id
+      FROM solicitudes_cuenta_cobro
+      WHERE medico_id = ?
+        AND year = ?
+        AND mes = ?
+        AND estado = 'pendiente'
+      LIMIT 1
+      `,
+      [medico_id, year, mes]
+    );
+
+    if (pendiente) {
+      return fail(res, new Error("Ya existe una cuenta de cobro pendiente para este mes"), 400);
+    }
+
+    const result = await run(
+      `
+      INSERT INTO solicitudes_cuenta_cobro (
+        medico_id,
+        year,
+        mes,
+        total_horas,
+        estado,
+        fecha_solicitud,
+        updated_at
+      )
+      VALUES (?, ?, ?, ?, 'pendiente', ?, ?)
+      `,
+      [medico_id, year, mes, Number.isFinite(total_horas) ? total_horas : 0, fechaActualSql(), fechaActualSql()]
+    );
+
+    const row = await get("SELECT * FROM solicitudes_cuenta_cobro WHERE id = ?", [result.id]);
+
+    return ok(res, row);
+  } catch (error) {
+    return fail(res, error);
+  }
+});
+
+app.put("/solicitudes-cuenta-cobro/:id/aprobar", requireAdmin, async (req, res) => {
+  try {
+    await ensureSolicitudesSchema();
+
+    const id = Number(req.params.id);
+    const solicitud = await get("SELECT * FROM solicitudes_cuenta_cobro WHERE id = ?", [id]);
+
+    if (!solicitud) {
+      return fail(res, new Error("Solicitud no encontrada"), 404);
+    }
+
+    if (solicitud.estado !== "pendiente") {
+      return fail(res, new Error("Esta solicitud ya fue gestionada"), 400);
+    }
+
+    await run(
+      `
+      UPDATE solicitudes_cuenta_cobro
+      SET estado = 'aprobado',
+          updated_at = ?
+      WHERE id = ?
+      `,
+      [fechaActualSql(), id]
+    );
+
+    const row = await get("SELECT * FROM solicitudes_cuenta_cobro WHERE id = ?", [id]);
+
+    return ok(res, row);
+  } catch (error) {
+    return fail(res, error);
+  }
+});
+
+app.put("/solicitudes-cuenta-cobro/:id/rechazar", requireAdmin, async (req, res) => {
+  try {
+    await ensureSolicitudesSchema();
+
+    const id = Number(req.params.id);
+    const solicitud = await get("SELECT * FROM solicitudes_cuenta_cobro WHERE id = ?", [id]);
+
+    if (!solicitud) {
+      return fail(res, new Error("Solicitud no encontrada"), 404);
+    }
+
+    if (solicitud.estado !== "pendiente") {
+      return fail(res, new Error("Esta solicitud ya fue gestionada"), 400);
+    }
+
+    await run(
+      `
+      UPDATE solicitudes_cuenta_cobro
+      SET estado = 'rechazado',
+          updated_at = ?
+      WHERE id = ?
+      `,
+      [fechaActualSql(), id]
+    );
+
+    const row = await get("SELECT * FROM solicitudes_cuenta_cobro WHERE id = ?", [id]);
+
+    return ok(res, row);
   } catch (error) {
     return fail(res, error);
   }
