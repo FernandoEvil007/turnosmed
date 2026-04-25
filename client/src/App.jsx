@@ -60,21 +60,21 @@ const TIPOS_TURNO = {
   DIA: {
     label: "Día",
     horas: 8,
-    color: "#3b82f6",
+    color: "#60a5fa",
     bg: "#1e3a5f",
     emoji: "☀️",
   },
   CENIZO: {
     label: "Cenizo",
     horas: 3,
-    color: "#f59e0b",
+    color: "#fbbf24",
     bg: "#3d2c00",
     emoji: "🌥️",
   },
   FDS: {
     label: "Fin Sem.",
     horas: 6,
-    color: "#8b5cf6",
+    color: "#c4b5fd",
     bg: "#2e1b5e",
     emoji: "📅",
   },
@@ -123,6 +123,23 @@ const RESET_PASS_FORM0 = {
   nuevaPassword: "",
 };
 
+const SOL_CAMBIO0 = {
+  turno_origen: "",
+  medico_destino_id: "",
+  turno_destino: "",
+  mensaje: "",
+};
+
+const SOL_CESION0 = {
+  turno_origen: "",
+  medico_receptor_id: "",
+  mensaje: "",
+};
+
+const SOL_HORARIO0 = {
+  mensaje: "",
+};
+
 /* ============================================================================
    HELPERS
 ============================================================================ */
@@ -155,6 +172,10 @@ function diaLabel(d) {
     weekday: "short",
     day: "numeric",
   });
+}
+
+function diaNumero(d) {
+  return d.getDate();
 }
 
 function isoDate(d) {
@@ -272,6 +293,60 @@ function inputStyle(hasErr = false) {
   };
 }
 
+function textareaStyle() {
+  return {
+    ...inputStyle(false),
+    minHeight: 92,
+    resize: "vertical",
+    lineHeight: 1.5,
+  };
+}
+
+function parseTurnoValue(value) {
+  const [fecha, tipo] = String(value || "").split("|");
+  return { fecha, tipo };
+}
+
+function buildTurnoValue(fecha, tipo) {
+  return `${fecha}|${tipo}`;
+}
+
+function getNextMonthInfo() {
+  const y = TODAY.getFullYear();
+  const m = TODAY.getMonth();
+  const next = new Date(y, m + 1, 1);
+
+  return {
+    year: next.getFullYear(),
+    month: next.getMonth(),
+    monthNumber: next.getMonth() + 1,
+    label: capFirst(mesLabel(next.getFullYear(), next.getMonth())),
+  };
+}
+
+function estaEnUltimos7DiasDelMes(date = TODAY) {
+  const y = date.getFullYear();
+  const m = date.getMonth();
+  const ultimoDia = new Date(y, m + 1, 0).getDate();
+  const diaActual = date.getDate();
+
+  return diaActual >= ultimoDia - 6;
+}
+
+function fechaBonita(fecha) {
+  if (!fecha) return "Sin fecha";
+  try {
+    const d = new Date(`${fecha}T12:00:00`);
+    return d.toLocaleDateString("es-CO", {
+      weekday: "short",
+      day: "2-digit",
+      month: "short",
+    });
+  } catch {
+    return fecha;
+  }
+}
+
 async function api(path, options = {}) {
   if (!API_URL) {
     throw new Error("Falta configurar VITE_API_URL en el frontend");
@@ -337,23 +412,30 @@ export default function App() {
   const [adminForm, setAdminForm] = useState(ADMIN_FORM0);
   const [resetPassForm, setResetPassForm] = useState(RESET_PASS_FORM0);
 
+  const [solCambioForm, setSolCambioForm] = useState(SOL_CAMBIO0);
+  const [solCesionForm, setSolCesionForm] = useState(SOL_CESION0);
+  const [solHorarioForm, setSolHorarioForm] = useState(SOL_HORARIO0);
+
   const [toast, setToast] = useState(null);
   const toastTimerRef = useRef(null);
 
   const diasCoord = useMemo(() => getDias(year, month), [year, month]);
   const diasProp = useMemo(() => getDias(propYear, propMes), [propYear, propMes]);
 
-  const pendientesHorario = useMemo(
-    () => solicHorario.filter((s) => s.estado === ESTADOS.PENDIENTE).length,
-    [solicHorario]
-  );
+  const pendientesHorario = useMemo(() => {
+    const h = solicHorario.filter((s) => s.estado === ESTADOS.PENDIENTE).length;
+    const c = solicitudesCambioTurno.filter((s) => s.estado === ESTADOS.PENDIENTE).length;
+    const ce = solicitudesCesionTurno.filter((s) => s.estado === ESTADOS.PENDIENTE).length;
+
+    return h + c + ce;
+  }, [solicHorario, solicitudesCambioTurno, solicitudesCesionTurno]);
 
   function showToast(msg, tipo = "ok") {
     setToast({ msg, tipo });
 
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
 
-    toastTimerRef.current = setTimeout(() => setToast(null), 3200);
+    toastTimerRef.current = setTimeout(() => setToast(null), 3400);
   }
 
   useEffect(() => {
@@ -520,6 +602,14 @@ export default function App() {
         (u) => u?.rol === "medico" && Number(u?.medico_id) === Number(medicoId)
       ) || null
     );
+  }
+
+  function getMedicoNombre(id) {
+    const med = medicos.find((m) => Number(m.id) === Number(id));
+
+    if (!med) return "No identificado";
+
+    return `${med.nombre || ""} ${med.apellido || ""}`.trim();
   }
 
   function limpiarLogin() {
@@ -1033,9 +1123,164 @@ export default function App() {
     }
   }
 
+  async function enviarSolicitudCambioTurno() {
+    if (!medicoActivo?.id) {
+      showToast("Sesión médica no válida", "err");
+      return;
+    }
+
+    const origen = parseTurnoValue(solCambioForm.turno_origen);
+    const destino = parseTurnoValue(solCambioForm.turno_destino);
+    const medicoDestinoId = Number(solCambioForm.medico_destino_id);
+
+    if (!origen.fecha || !origen.tipo || !medicoDestinoId || !destino.fecha || !destino.tipo) {
+      showToast("Completa turno propio, médico destino y turno a cambiar", "err");
+      return;
+    }
+
+    try {
+      await api("/solicitudes-cambio-turno", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          medico_solicitante_id: medicoActivo.id,
+          medico_destino_id: medicoDestinoId,
+          fecha_origen: origen.fecha,
+          tipo_turno_origen: origen.tipo,
+          fecha_destino: destino.fecha,
+          tipo_turno_destino: destino.tipo,
+          mensaje: solCambioForm.mensaje || "",
+          estado: ESTADOS.PENDIENTE,
+        }),
+      });
+
+      setSolCambioForm(SOL_CAMBIO0);
+      await cargarSolicitudesCambio();
+      showToast("Solicitud de cambio enviada a coordinación ✓");
+    } catch (error) {
+      console.error(error);
+      showToast(error.message || "No se pudo enviar la solicitud de cambio", "err");
+    }
+  }
+
+  async function enviarSolicitudCesionTurno() {
+    if (!medicoActivo?.id) {
+      showToast("Sesión médica no válida", "err");
+      return;
+    }
+
+    const origen = parseTurnoValue(solCesionForm.turno_origen);
+    const medicoReceptorId = Number(solCesionForm.medico_receptor_id);
+
+    if (!origen.fecha || !origen.tipo || !medicoReceptorId) {
+      showToast("Completa turno propio y médico receptor", "err");
+      return;
+    }
+
+    try {
+      await api("/solicitudes-cesion-turno", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          medico_solicitante_id: medicoActivo.id,
+          medico_receptor_id: medicoReceptorId,
+          fecha: origen.fecha,
+          tipo_turno: origen.tipo,
+          mensaje: solCesionForm.mensaje || "",
+          estado: ESTADOS.PENDIENTE,
+        }),
+      });
+
+      setSolCesionForm(SOL_CESION0);
+      await cargarSolicitudesCesion();
+      showToast("Solicitud de cesión enviada a coordinación ✓");
+    } catch (error) {
+      console.error(error);
+      showToast(error.message || "No se pudo enviar la solicitud de cesión", "err");
+    }
+  }
+
+  async function enviarSolicitudHorario() {
+    if (!medicoActivo?.id) {
+      showToast("Sesión médica no válida", "err");
+      return;
+    }
+
+    if (!estaEnUltimos7DiasDelMes()) {
+      showToast("La solicitud de horario solo se habilita los últimos 7 días del mes", "err");
+      return;
+    }
+
+    const mensaje = String(solHorarioForm.mensaje || "").trim();
+
+    if (!mensaje) {
+      showToast("Escribe el mensaje para coordinación", "err");
+      return;
+    }
+
+    const next = getNextMonthInfo();
+
+    try {
+      await api("/solicitudes-horario", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          medico_id: medicoActivo.id,
+          medico_solicitante_id: medicoActivo.id,
+          year: next.year,
+          mes: next.monthNumber,
+          mes_programacion: next.monthNumber,
+          mensaje,
+          estado: ESTADOS.PENDIENTE,
+        }),
+      });
+
+      setSolHorarioForm(SOL_HORARIO0);
+      await cargarSolicitudesHorario();
+      showToast("Solicitud de horario enviada a coordinación ✓");
+    } catch (error) {
+      console.error(error);
+      showToast(error.message || "No se pudo enviar la solicitud de horario", "err");
+    }
+  }
+
+  async function cambiarEstadoSolicitud(tipo, id, accion) {
+    const endpoints = {
+      cambio: `/solicitudes-cambio-turno/${id}/${accion}`,
+      cesion: `/solicitudes-cesion-turno/${id}/${accion}`,
+      horario: `/solicitudes-horario/${id}/${accion}`,
+    };
+
+    if (!endpoints[tipo]) return;
+
+    try {
+      await api(endpoints[tipo], {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+      });
+
+      await Promise.all([
+        cargarSolicitudesCambio(),
+        cargarSolicitudesCesion(),
+        cargarSolicitudesHorario(),
+        cargarTurnos(),
+      ]);
+
+      showToast(
+        accion === "aprobar"
+          ? "Solicitud aprobada correctamente ✓"
+          : "Solicitud rechazada correctamente ✓"
+      );
+    } catch (error) {
+      console.error(error);
+      showToast(error.message || "No se pudo actualizar la solicitud", "err");
+    }
+  }
+
   if (pantalla === PANTALLAS.SELECTOR) {
     return (
       <div className="tm-page-center" style={S.pageCenter}>
+        <ResponsiveStyles />
         <CreditBadge />
         <Toast toast={toast} />
 
@@ -1166,6 +1411,7 @@ export default function App() {
     if (!medicoActivo || usuarioSesion?.rol !== "medico") {
       return (
         <div className="tm-page-center" style={S.pageCenter}>
+          <ResponsiveStyles />
           <Toast toast={toast} />
 
           <div className="tm-card" style={S.cardRestrict}>
@@ -1186,6 +1432,7 @@ export default function App() {
 
     return (
       <div style={S.page}>
+        <ResponsiveStyles />
         <Toast toast={toast} />
 
         <div className="tm-portal-header" style={S.portalHeader}>
@@ -1212,9 +1459,12 @@ export default function App() {
         </div>
 
         <div className="tm-medico-wrap" style={S.medicoWrap}>
-          <h1 className="tm-page-title" style={S.pageTitle}>📅 Mi horario</h1>
+          <h1 className="tm-page-title" style={S.pageTitle}>
+            📅 Mi horario
+          </h1>
+
           <p style={S.pageSubtitle}>
-            Consulta tus turnos asignados por mes. Esta vista es solo informativa.
+            Consulta tus turnos asignados por mes y envía solicitudes a coordinación.
           </p>
 
           <div className="tm-month-selector" style={S.monthSelector}>
@@ -1254,45 +1504,33 @@ export default function App() {
             </span>
           </div>
 
-          <div className="tm-days-grid" style={S.daysGrid}>
-            {diasProp.map((d) => {
-              const f = isoDate(d);
-              const tipos = turnosDiaOrdenados(getTurnosDia(medicoActivo.id, f));
-              const extra = getHorasExtraDia(medicoActivo.id, f);
-              const esHoy = f === HOY_ISO;
-              const esFin = isWE(d);
+          <MedicoCalendarioCompacto
+            diasProp={diasProp}
+            medicoActivo={medicoActivo}
+            getTurnosDia={getTurnosDia}
+            getHorasExtraDia={getHorasExtraDia}
+            horasDiaTotal={horasDiaTotal}
+          />
 
-              return (
-                <div
-                  key={f}
-                  style={{
-                    ...S.dayCard,
-                    border: `1px solid ${
-                      esHoy ? "#60a5fa" : esFin ? "#374151" : "#1e293b"
-                    }`,
-                  }}
-                >
-                  <div style={S.dayLabel(esHoy, esFin)}>{diaLabel(d)}</div>
-
-                  <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-                    {tipos.length === 0 && <div style={S.turnoLibre}>🏖️ Libre</div>}
-
-                    {tipos.map((tipo) => (
-                      <div key={tipo} style={S.turnoChip(TIPOS_TURNO[tipo])}>
-                        {TIPOS_TURNO[tipo].emoji} {TIPOS_TURNO[tipo].label}
-                      </div>
-                    ))}
-
-                    {extra > 0 && <div style={S.extraChip}>➕ {extra}h extra</div>}
-                  </div>
-
-                  <div style={S.dayTotal}>
-                    Total día: {horasDiaTotal(medicoActivo.id, f)}h
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+          <SolicitudesMedico
+            medicoActivo={medicoActivo}
+            medicos={medicos}
+            diasProp={diasProp}
+            getTurnosDia={getTurnosDia}
+            solCambioForm={solCambioForm}
+            setSolCambioForm={setSolCambioForm}
+            solCesionForm={solCesionForm}
+            setSolCesionForm={setSolCesionForm}
+            solHorarioForm={solHorarioForm}
+            setSolHorarioForm={setSolHorarioForm}
+            enviarSolicitudCambioTurno={enviarSolicitudCambioTurno}
+            enviarSolicitudCesionTurno={enviarSolicitudCesionTurno}
+            enviarSolicitudHorario={enviarSolicitudHorario}
+            solicitudesCambioTurno={solicitudesCambioTurno}
+            solicitudesCesionTurno={solicitudesCesionTurno}
+            solicHorario={solicHorario}
+            getMedicoNombre={getMedicoNombre}
+          />
         </div>
       </div>
     );
@@ -1302,6 +1540,8 @@ export default function App() {
     if (!usuarioSesion || usuarioSesion.rol !== "coordinador") {
       return (
         <div className="tm-page-center" style={S.pageCenter}>
+          <ResponsiveStyles />
+
           <div className="tm-card" style={S.cardRestrict}>
             <div style={{ fontSize: 42, marginBottom: 12 }}>🔒</div>
             <div style={S.restrictTitle}>Acceso restringido</div>
@@ -1323,6 +1563,7 @@ export default function App() {
 
     return (
       <div style={S.page}>
+        <ResponsiveStyles />
         <Toast toast={toast} />
 
         <HeaderSimple
@@ -1366,6 +1607,7 @@ export default function App() {
   if (!usuarioSesion || usuarioSesion.rol !== "coordinador") {
     return (
       <div className="tm-page-center" style={S.pageCenter}>
+        <ResponsiveStyles />
         <Toast toast={toast} />
 
         <div className="tm-card" style={S.cardRestrict}>
@@ -1383,11 +1625,13 @@ export default function App() {
 
   return (
     <div className="tm-coord-layout" style={S.coordLayout}>
+      <ResponsiveStyles />
       <Toast toast={toast} />
 
       <aside className="tm-sidebar" style={S.sidebar}>
         <div className="tm-sidebar-top" style={S.sidebarTop}>
           <span style={{ fontSize: 24 }}>🏥</span>
+
           <div>
             <div style={S.sidebarTitle}>TurnosMed</div>
             <div style={S.sidebarSub}>Panel Administrador</div>
@@ -1402,7 +1646,7 @@ export default function App() {
             {
               key: VIEWS_COORD.HORARIOS,
               icon: "📬",
-              label: "Propuestas",
+              label: "Solicitudes",
               badge: pendientesHorario,
             },
           ].map((item) => (
@@ -1521,6 +1765,8 @@ export default function App() {
             solicitudesCambioTurno={solicitudesCambioTurno}
             solicitudesCesionTurno={solicitudesCesionTurno}
             medicos={medicos}
+            getMedicoNombre={getMedicoNombre}
+            cambiarEstadoSolicitud={cambiarEstadoSolicitud}
           />
         )}
       </main>
@@ -1531,6 +1777,133 @@ export default function App() {
 /* ============================================================================
    COMPONENTES
 ============================================================================ */
+function ResponsiveStyles() {
+  return (
+    <style>
+      {`
+        @media (min-width: 769px) {
+          .tm-medico-week-row {
+            display: none !important;
+          }
+        }
+
+        @media (max-width: 768px) {
+          .tm-medico-calendar-wrap {
+            background: #0b1528 !important;
+            border: 1px solid #1e293b !important;
+            border-radius: 16px !important;
+            padding: 10px !important;
+            box-shadow: 0 18px 45px rgba(0,0,0,0.22) !important;
+          }
+
+          .tm-medico-week-row {
+            display: grid !important;
+            grid-template-columns: repeat(7, minmax(0, 1fr)) !important;
+            gap: 3px !important;
+            margin-bottom: 5px !important;
+          }
+
+          .tm-medico-week-label {
+            text-align: center !important;
+            color: #94a3b8 !important;
+            font-size: 10px !important;
+            font-weight: 900 !important;
+          }
+
+          .tm-medico-calendar-grid {
+            display: grid !important;
+            grid-template-columns: repeat(7, minmax(0, 1fr)) !important;
+            gap: 3px !important;
+          }
+
+          .tm-medico-day-card {
+            min-height: 76px !important;
+            padding: 4px !important;
+            border-radius: 7px !important;
+          }
+
+          .tm-medico-day-head {
+            display: flex !important;
+            justify-content: flex-end !important;
+            align-items: center !important;
+            margin-bottom: 2px !important;
+          }
+
+          .tm-medico-day-name {
+            display: none !important;
+          }
+
+          .tm-medico-day-number {
+            font-size: 13px !important;
+            font-weight: 900 !important;
+          }
+
+          .tm-medico-shift-list {
+            gap: 2px !important;
+          }
+
+          .tm-medico-shift-chip {
+            font-size: 8.5px !important;
+            line-height: 1.05 !important;
+            padding: 2px 3px !important;
+            border-radius: 5px !important;
+            gap: 2px !important;
+            justify-content: center !important;
+          }
+
+          .tm-medico-shift-chip span:first-child {
+            font-size: 9px !important;
+          }
+
+          .tm-medico-free-chip {
+            font-size: 8px !important;
+            padding: 2px 3px !important;
+            border-radius: 5px !important;
+            justify-content: center !important;
+          }
+
+          .tm-medico-day-total {
+            font-size: 8px !important;
+            margin-top: 2px !important;
+            padding-top: 2px !important;
+          }
+
+          .tm-solicitudes-grid {
+            grid-template-columns: 1fr !important;
+          }
+
+          .tm-solicitud-card {
+            padding: 14px !important;
+          }
+
+          .tm-solicitud-row {
+            grid-template-columns: 1fr !important;
+          }
+        }
+
+        @media (max-width: 380px) {
+          .tm-medico-day-card {
+            min-height: 70px !important;
+            padding: 3px !important;
+          }
+
+          .tm-medico-day-number {
+            font-size: 12px !important;
+          }
+
+          .tm-medico-shift-chip {
+            font-size: 8px !important;
+          }
+
+          .tm-medico-free-chip {
+            font-size: 7.5px !important;
+          }
+        }
+      `}
+    </style>
+  );
+}
+
 function CreditBadge() {
   return (
     <div style={S.creditBadge}>
@@ -1619,6 +1992,439 @@ function FieldDate({ label, value, onChange }) {
       <label style={S.lbl}>{label}</label>
 
       <input type="date" value={value} onChange={onChange} style={inputStyle(false)} />
+    </div>
+  );
+}
+
+function MedicoCalendarioCompacto({
+  diasProp,
+  medicoActivo,
+  getTurnosDia,
+  getHorasExtraDia,
+  horasDiaTotal,
+}) {
+  return (
+    <div className="tm-medico-calendar-wrap" style={S.medicoCalendarWrap}>
+      <div className="tm-medico-week-row">
+        {["LUN", "MAR", "MIÉ", "JUE", "VIE", "SÁB", "DOM"].map((d) => (
+          <div key={d} className="tm-medico-week-label">
+            {d}
+          </div>
+        ))}
+      </div>
+
+      <div className="tm-medico-calendar-grid" style={S.medicoCalendarGrid}>
+        {diasProp.map((d) => {
+          const f = isoDate(d);
+          const tipos = turnosDiaOrdenados(getTurnosDia(medicoActivo.id, f));
+          const extra = getHorasExtraDia(medicoActivo.id, f);
+          const esHoy = f === HOY_ISO;
+          const esFin = isWE(d);
+          const total = horasDiaTotal(medicoActivo.id, f);
+
+          return (
+            <div
+              key={f}
+              className="tm-medico-day-card"
+              style={{
+                ...S.medicoDayCard,
+                border: `1px solid ${esHoy ? "#60a5fa" : esFin ? "#374151" : "#1e293b"}`,
+                boxShadow: esHoy ? "0 0 0 1px rgba(96,165,250,0.45)" : "none",
+              }}
+            >
+              <div className="tm-medico-day-head" style={S.medicoDayHead}>
+                <span className="tm-medico-day-name" style={S.medicoDayName}>
+                  {diaLabel(d)}
+                </span>
+
+                <span
+                  className="tm-medico-day-number"
+                  style={{
+                    ...S.medicoDayNumber,
+                    color: esHoy ? "#60a5fa" : esFin ? "#c4b5fd" : "#e5e7eb",
+                  }}
+                >
+                  {diaNumero(d)}
+                </span>
+              </div>
+
+              <div className="tm-medico-shift-list" style={S.medicoShiftList}>
+                {tipos.length === 0 && (
+                  <div className="tm-medico-free-chip" style={S.medicoFreeChip}>
+                    🏖️ Libre
+                  </div>
+                )}
+
+                {tipos.map((tipo) => (
+                  <div
+                    key={tipo}
+                    className="tm-medico-shift-chip"
+                    style={S.medicoShiftChip(TIPOS_TURNO[tipo])}
+                  >
+                    <span>{TIPOS_TURNO[tipo].emoji}</span>
+                    <span>{TIPOS_TURNO[tipo].label}</span>
+                  </div>
+                ))}
+
+                {extra > 0 && (
+                  <div className="tm-medico-shift-chip" style={S.medicoExtraChip}>
+                    <span>➕</span>
+                    <span>{extra}h</span>
+                  </div>
+                )}
+              </div>
+
+              <div className="tm-medico-day-total" style={S.medicoDayTotal}>
+                ⏱️ {total}h
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function SolicitudesMedico({
+  medicoActivo,
+  medicos,
+  diasProp,
+  getTurnosDia,
+  solCambioForm,
+  setSolCambioForm,
+  solCesionForm,
+  setSolCesionForm,
+  solHorarioForm,
+  setSolHorarioForm,
+  enviarSolicitudCambioTurno,
+  enviarSolicitudCesionTurno,
+  enviarSolicitudHorario,
+  solicitudesCambioTurno,
+  solicitudesCesionTurno,
+  solicHorario,
+  getMedicoNombre,
+}) {
+  const misTurnos = useMemo(() => {
+    if (!medicoActivo?.id) return [];
+
+    const arr = [];
+
+    diasProp.forEach((d) => {
+      const fecha = isoDate(d);
+      const tipos = turnosDiaOrdenados(getTurnosDia(medicoActivo.id, fecha));
+
+      tipos.forEach((tipo) => {
+        arr.push({
+          value: buildTurnoValue(fecha, tipo),
+          label: `${fechaBonita(fecha)} · ${TIPOS_TURNO[tipo].emoji} ${TIPOS_TURNO[tipo].label}`,
+          fecha,
+          tipo,
+        });
+      });
+    });
+
+    return arr;
+  }, [diasProp, medicoActivo, getTurnosDia]);
+
+  const medicosDestino = medicos.filter((m) => Number(m.id) !== Number(medicoActivo.id));
+
+  const turnosMedicoDestino = useMemo(() => {
+    const medicoId = Number(solCambioForm.medico_destino_id);
+
+    if (!medicoId) return [];
+
+    const arr = [];
+
+    diasProp.forEach((d) => {
+      const fecha = isoDate(d);
+      const tipos = turnosDiaOrdenados(getTurnosDia(medicoId, fecha));
+
+      tipos.forEach((tipo) => {
+        arr.push({
+          value: buildTurnoValue(fecha, tipo),
+          label: `${fechaBonita(fecha)} · ${TIPOS_TURNO[tipo].emoji} ${TIPOS_TURNO[tipo].label}`,
+        });
+      });
+    });
+
+    return arr;
+  }, [solCambioForm.medico_destino_id, diasProp, getTurnosDia]);
+
+  const next = getNextMonthInfo();
+  const disponibleHorario = estaEnUltimos7DiasDelMes();
+
+  const misCambios = solicitudesCambioTurno
+    .filter((s) => Number(s.medico_solicitante_id || s.medico_id) === Number(medicoActivo.id))
+    .slice(-4)
+    .reverse();
+
+  const misCesiones = solicitudesCesionTurno
+    .filter((s) => Number(s.medico_solicitante_id || s.medico_id) === Number(medicoActivo.id))
+    .slice(-4)
+    .reverse();
+
+  const misHorarios = solicHorario
+    .filter((s) => Number(s.medico_id || s.medico_solicitante_id) === Number(medicoActivo.id))
+    .slice(-4)
+    .reverse();
+
+  return (
+    <section style={S.solicitudesMedicoSection}>
+      <div style={S.sectionHeader}>
+        <div>
+          <h2 style={S.sectionTitle}>📬 Solicitudes</h2>
+          <p style={S.sectionSub}>
+            Envía cambios, cesiones o mensajes de programación a coordinación.
+          </p>
+        </div>
+      </div>
+
+      <div className="tm-solicitudes-grid" style={S.solicitudesGrid}>
+        <div className="tm-solicitud-card" style={S.solicitudCard}>
+          <div style={S.solicitudTitle}>🔁 Cambio de turno</div>
+          <div style={S.solicitudSub}>Propón intercambiar un turno con otro médico.</div>
+
+          <div className="tm-solicitud-row" style={S.solicitudRow}>
+            <FieldSelect
+              label="Mi turno"
+              value={solCambioForm.turno_origen}
+              onChange={(e) =>
+                setSolCambioForm((p) => ({ ...p, turno_origen: e.target.value }))
+              }
+              options={[
+                { value: "", label: "— Seleccione —" },
+                ...misTurnos.map((t) => ({ value: t.value, label: t.label })),
+              ]}
+            />
+
+            <FieldSelect
+              label="Médico con quien cambia"
+              value={solCambioForm.medico_destino_id}
+              onChange={(e) =>
+                setSolCambioForm((p) => ({
+                  ...p,
+                  medico_destino_id: e.target.value,
+                  turno_destino: "",
+                }))
+              }
+              options={[
+                { value: "", label: "— Seleccione —" },
+                ...medicosDestino.map((m) => ({
+                  value: m.id,
+                  label: `${m.nombre} ${m.apellido}`,
+                })),
+              ]}
+            />
+          </div>
+
+          <FieldSelect
+            label="Turno del otro médico"
+            value={solCambioForm.turno_destino}
+            onChange={(e) =>
+              setSolCambioForm((p) => ({ ...p, turno_destino: e.target.value }))
+            }
+            options={[
+              {
+                value: "",
+                label: solCambioForm.medico_destino_id
+                  ? "— Seleccione turno —"
+                  : "Seleccione primero un médico",
+              },
+              ...turnosMedicoDestino,
+            ]}
+          />
+
+          <div style={{ marginTop: 10 }}>
+            <Campo label="Mensaje opcional">
+              <textarea
+                value={solCambioForm.mensaje}
+                onChange={(e) =>
+                  setSolCambioForm((p) => ({ ...p, mensaje: e.target.value }))
+                }
+                style={textareaStyle()}
+                placeholder="Explique brevemente el motivo del cambio..."
+              />
+            </Campo>
+          </div>
+
+          <button
+            type="button"
+            onClick={enviarSolicitudCambioTurno}
+            style={{ ...S.primaryButton, marginTop: 12, width: "100%" }}
+          >
+            Enviar solicitud de cambio
+          </button>
+        </div>
+
+        <div className="tm-solicitud-card" style={S.solicitudCard}>
+          <div style={S.solicitudTitle}>🤝 Cesión de turno</div>
+          <div style={S.solicitudSub}>Solicita ceder uno de tus turnos a otro médico.</div>
+
+          <div className="tm-solicitud-row" style={S.solicitudRow}>
+            <FieldSelect
+              label="Turno que deseo ceder"
+              value={solCesionForm.turno_origen}
+              onChange={(e) =>
+                setSolCesionForm((p) => ({ ...p, turno_origen: e.target.value }))
+              }
+              options={[
+                { value: "", label: "— Seleccione —" },
+                ...misTurnos.map((t) => ({ value: t.value, label: t.label })),
+              ]}
+            />
+
+            <FieldSelect
+              label="Médico receptor"
+              value={solCesionForm.medico_receptor_id}
+              onChange={(e) =>
+                setSolCesionForm((p) => ({ ...p, medico_receptor_id: e.target.value }))
+              }
+              options={[
+                { value: "", label: "— Seleccione —" },
+                ...medicosDestino.map((m) => ({
+                  value: m.id,
+                  label: `${m.nombre} ${m.apellido}`,
+                })),
+              ]}
+            />
+          </div>
+
+          <div style={{ marginTop: 10 }}>
+            <Campo label="Mensaje opcional">
+              <textarea
+                value={solCesionForm.mensaje}
+                onChange={(e) =>
+                  setSolCesionForm((p) => ({ ...p, mensaje: e.target.value }))
+                }
+                style={textareaStyle()}
+                placeholder="Explique brevemente el motivo de la cesión..."
+              />
+            </Campo>
+          </div>
+
+          <button
+            type="button"
+            onClick={enviarSolicitudCesionTurno}
+            style={{ ...S.primaryButton, marginTop: 12, width: "100%" }}
+          >
+            Enviar solicitud de cesión
+          </button>
+        </div>
+
+        <div className="tm-solicitud-card" style={S.solicitudCard}>
+          <div style={S.solicitudTitle}>📝 Solicitud de horario</div>
+
+          <div style={S.solicitudSub}>
+            Para programación de <b>{next.label}</b>. Disponible solo durante los últimos 7 días del mes.
+          </div>
+
+          <div
+            style={{
+              ...S.windowBadge,
+              background: disponibleHorario ? "#14532d" : "#3d2c00",
+              color: disponibleHorario ? "#86efac" : "#facc15",
+            }}
+          >
+            {disponibleHorario
+              ? "🟢 Ventana abierta: puedes enviar tu solicitud"
+              : "🔒 Se habilita durante los últimos 7 días del mes"}
+          </div>
+
+          <Campo label="Mensaje para coordinación">
+            <textarea
+              value={solHorarioForm.mensaje}
+              onChange={(e) =>
+                setSolHorarioForm((p) => ({ ...p, mensaje: e.target.value }))
+              }
+              style={textareaStyle()}
+              placeholder="Ejemplo: para el próximo mes solicito evitar los días 10, 11 y 12. Puedo apoyar fines de semana si se requiere..."
+              disabled={!disponibleHorario}
+            />
+          </Campo>
+
+          <button
+            type="button"
+            onClick={enviarSolicitudHorario}
+            style={{
+              ...S.primaryButton,
+              marginTop: 12,
+              width: "100%",
+              opacity: disponibleHorario ? 1 : 0.55,
+              cursor: disponibleHorario ? "pointer" : "not-allowed",
+            }}
+            disabled={!disponibleHorario}
+          >
+            Enviar solicitud de horario
+          </button>
+        </div>
+      </div>
+
+      <div style={S.historialSolicitudes}>
+        <div style={S.solicitudTitle}>📌 Mis últimas solicitudes</div>
+
+        {[...misCambios, ...misCesiones, ...misHorarios].length === 0 && (
+          <div style={S.emptyCard}>Aún no tienes solicitudes registradas.</div>
+        )}
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {misCambios.map((s) => (
+            <MiniSolicitud
+              key={`cambio-${s.id}`}
+              icon="🔁"
+              title="Cambio de turno"
+              estado={s.estado}
+              text={`${fechaBonita(s.fecha_origen)} ${s.tipo_turno_origen || ""} con ${getMedicoNombre(
+                s.medico_destino_id
+              )}`}
+            />
+          ))}
+
+          {misCesiones.map((s) => (
+            <MiniSolicitud
+              key={`cesion-${s.id}`}
+              icon="🤝"
+              title="Cesión de turno"
+              estado={s.estado}
+              text={`${fechaBonita(s.fecha)} ${s.tipo_turno || ""} hacia ${getMedicoNombre(
+                s.medico_receptor_id
+              )}`}
+            />
+          ))}
+
+          {misHorarios.map((s) => (
+            <MiniSolicitud
+              key={`horario-${s.id}`}
+              icon="📝"
+              title="Solicitud de horario"
+              estado={s.estado}
+              text={`Programación mes ${s.mes || s.mes_programacion || ""}`}
+            />
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function MiniSolicitud({ icon, title, text, estado }) {
+  return (
+    <div style={S.miniSolicitud}>
+      <div style={{ fontSize: 20 }}>{icon}</div>
+
+      <div style={{ flex: 1 }}>
+        <div style={S.miniSolicitudTitle}>{title}</div>
+        <div style={S.miniSolicitudSub}>{text}</div>
+      </div>
+
+      <span
+        style={{
+          ...S.chip,
+          background: getEstadoBg(estado),
+          color: getEstadoColor(estado),
+        }}
+      >
+        {estado || "pendiente"}
+      </span>
     </div>
   );
 }
@@ -2392,64 +3198,188 @@ function VistaSolicitudes({
   solicitudesCambioTurno,
   solicitudesCesionTurno,
   medicos,
+  getMedicoNombre,
+  cambiarEstadoSolicitud,
 }) {
+  const pendientesCambio = solicitudesCambioTurno.filter((s) => s.estado === ESTADOS.PENDIENTE);
+  const pendientesCesion = solicitudesCesionTurno.filter((s) => s.estado === ESTADOS.PENDIENTE);
+  const pendientesHorario = solicHorario.filter((s) => s.estado === ESTADOS.PENDIENTE);
+
   return (
     <section>
-      <PageHeader title="Propuestas y solicitudes" sub="Resumen de solicitudes del personal médico" />
+      <PageHeader
+        title="Solicitudes médicas"
+        sub="Solicitudes de cambio, cesión y programación enviadas por los médicos"
+      />
 
       <div className="tm-cards-grid" style={S.cardsGrid}>
-        <SolicitudBox title="Propuestas de horario" count={solicHorario.length} />
-        <SolicitudBox title="Cambios de turno" count={solicitudesCambioTurno.length} />
-        <SolicitudBox title="Cesiones de turno" count={solicitudesCesionTurno.length} />
+        <SolicitudBox title="Cambios pendientes" count={pendientesCambio.length} icon="🔁" />
+        <SolicitudBox title="Cesiones pendientes" count={pendientesCesion.length} icon="🤝" />
+        <SolicitudBox title="Horarios pendientes" count={pendientesHorario.length} icon="📝" />
       </div>
 
-      <div className="tm-card" style={S.card}>
-        <div style={S.secTitle}>Solicitudes recientes</div>
-
-        {[...solicitudesCambioTurno, ...solicitudesCesionTurno].length === 0 && (
-          <div style={S.emptyCard}>No hay solicitudes registradas.</div>
-        )}
-
-        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          {[...solicitudesCambioTurno, ...solicitudesCesionTurno].map((sol) => {
-            const medicoSolicitante = medicos.find(
-              (m) => Number(m.id) === Number(sol.medico_solicitante_id)
-            );
-
-            const color = getEstadoColor(sol.estado);
-
-            return (
-              <div key={`${sol.id}-${sol.fecha_solicitud}`} style={S.requestCard(color)}>
-                <div style={S.rowBetween}>
-                  <div>
-                    <div style={S.reqTitle}>
-                      {medicoSolicitante
-                        ? `${medicoSolicitante.nombre} ${medicoSolicitante.apellido}`
-                        : "Médico"}
-                    </div>
-
-                    <div style={S.reqSub}>
-                      Estado: {sol.estado} · Fecha solicitud: {sol.fecha_solicitud || "N/A"}
-                    </div>
-                  </div>
-
-                  <span style={{ ...S.chip, background: getEstadoBg(sol.estado), color }}>
-                    {sol.estado}
-                  </span>
-                </div>
+      <SolicitudAdminGrupo
+        titulo="🔁 Solicitudes de cambio de turno"
+        vacio="No hay solicitudes de cambio registradas."
+        solicitudes={solicitudesCambioTurno}
+        tipo="cambio"
+        getMedicoNombre={getMedicoNombre}
+        cambiarEstadoSolicitud={cambiarEstadoSolicitud}
+        renderDetalle={(s) => (
+          <>
+            <div>
+              <b>Solicitante:</b> {getMedicoNombre(s.medico_solicitante_id || s.medico_id)}
+            </div>
+            <div>
+              <b>Turno origen:</b> {fechaBonita(s.fecha_origen)} · {s.tipo_turno_origen}
+            </div>
+            <div>
+              <b>Cambia con:</b> {getMedicoNombre(s.medico_destino_id)}
+            </div>
+            <div>
+              <b>Turno destino:</b> {fechaBonita(s.fecha_destino)} · {s.tipo_turno_destino}
+            </div>
+            {s.mensaje && (
+              <div>
+                <b>Mensaje:</b> {s.mensaje}
               </div>
-            );
-          })}
-        </div>
-      </div>
+            )}
+          </>
+        )}
+      />
+
+      <SolicitudAdminGrupo
+        titulo="🤝 Solicitudes de cesión de turno"
+        vacio="No hay solicitudes de cesión registradas."
+        solicitudes={solicitudesCesionTurno}
+        tipo="cesion"
+        getMedicoNombre={getMedicoNombre}
+        cambiarEstadoSolicitud={cambiarEstadoSolicitud}
+        renderDetalle={(s) => (
+          <>
+            <div>
+              <b>Solicitante:</b> {getMedicoNombre(s.medico_solicitante_id || s.medico_id)}
+            </div>
+            <div>
+              <b>Turno a ceder:</b> {fechaBonita(s.fecha)} · {s.tipo_turno}
+            </div>
+            <div>
+              <b>Receptor:</b> {getMedicoNombre(s.medico_receptor_id)}
+            </div>
+            {s.mensaje && (
+              <div>
+                <b>Mensaje:</b> {s.mensaje}
+              </div>
+            )}
+          </>
+        )}
+      />
+
+      <SolicitudAdminGrupo
+        titulo="📝 Solicitudes de horario del próximo mes"
+        vacio="No hay solicitudes de horario registradas."
+        solicitudes={solicHorario}
+        tipo="horario"
+        getMedicoNombre={getMedicoNombre}
+        cambiarEstadoSolicitud={cambiarEstadoSolicitud}
+        renderDetalle={(s) => (
+          <>
+            <div>
+              <b>Médico:</b> {getMedicoNombre(s.medico_id || s.medico_solicitante_id)}
+            </div>
+            <div>
+              <b>Mes solicitado:</b> {s.mes || s.mes_programacion || "No especificado"}{" "}
+              {s.year || ""}
+            </div>
+            {s.mensaje && (
+              <div>
+                <b>Mensaje:</b> {s.mensaje}
+              </div>
+            )}
+          </>
+        )}
+      />
     </section>
   );
 }
 
-function SolicitudBox({ title, count }) {
+function SolicitudAdminGrupo({
+  titulo,
+  vacio,
+  solicitudes,
+  tipo,
+  cambiarEstadoSolicitud,
+  renderDetalle,
+}) {
   return (
     <div className="tm-card" style={S.card}>
-      <div style={S.configTitle}>{title}</div>
+      <div style={S.secTitle}>{titulo}</div>
+
+      {solicitudes.length === 0 && <div style={S.emptyCard}>{vacio}</div>}
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        {solicitudes.map((s) => {
+          const estado = s.estado || ESTADOS.PENDIENTE;
+          const pendiente = estado === ESTADOS.PENDIENTE;
+
+          return (
+            <div key={`${tipo}-${s.id}`} style={S.requestCard(getEstadoColor(estado))}>
+              <div style={S.rowBetween}>
+                <div style={{ flex: 1 }}>
+                  <div style={S.reqTitle}>Solicitud #{s.id}</div>
+
+                  <div style={S.reqSub}>
+                    Estado: {estado} · Fecha solicitud:{" "}
+                    {s.fecha_solicitud || s.created_at || "N/A"}
+                  </div>
+
+                  <div style={S.reqDetails}>{renderDetalle(s)}</div>
+                </div>
+
+                <span
+                  style={{
+                    ...S.chip,
+                    background: getEstadoBg(estado),
+                    color: getEstadoColor(estado),
+                  }}
+                >
+                  {estado}
+                </span>
+              </div>
+
+              {pendiente && (
+                <div style={S.requestActions}>
+                  <button
+                    type="button"
+                    onClick={() => cambiarEstadoSolicitud(tipo, s.id, "aprobar")}
+                    style={S.approveBtn}
+                  >
+                    ✅ Aprobar
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => cambiarEstadoSolicitud(tipo, s.id, "rechazar")}
+                    style={S.rejectBtn}
+                  >
+                    ❌ Rechazar
+                  </button>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function SolicitudBox({ title, count, icon }) {
+  return (
+    <div className="tm-card" style={S.card}>
+      <div style={S.configTitle}>
+        {icon} {title}
+      </div>
       <div style={{ fontSize: 32, fontWeight: 900, color: "#f1f5f9", marginTop: 10 }}>
         {count}
       </div>
@@ -2461,7 +3391,9 @@ function PageHeader({ title, sub, action }) {
   return (
     <div className="tm-page-header" style={S.pageHeader}>
       <div>
-        <h1 className="tm-page-title" style={S.pageTitle}>{title}</h1>
+        <h1 className="tm-page-title" style={S.pageTitle}>
+          {title}
+        </h1>
         <p style={S.pageSubtitle}>{sub}</p>
       </div>
 
@@ -2614,6 +3546,26 @@ const S = {
     cursor: "pointer",
   },
 
+  approveBtn: {
+    background: "#14532d",
+    color: "#86efac",
+    border: "1px solid #166534",
+    borderRadius: 9,
+    padding: "9px 12px",
+    fontWeight: 900,
+    cursor: "pointer",
+  },
+
+  rejectBtn: {
+    background: "#450a0a",
+    color: "#fecaca",
+    border: "1px solid #7f1d1d",
+    borderRadius: 9,
+    padding: "9px 12px",
+    fontWeight: 900,
+    cursor: "pointer",
+  },
+
   toast: {
     position: "fixed",
     top: 18,
@@ -2682,7 +3634,7 @@ const S = {
   },
 
   medicoWrap: {
-    maxWidth: 1000,
+    maxWidth: 1080,
     margin: "0 auto",
     padding: "28px 24px",
   },
@@ -2767,25 +3719,99 @@ const S = {
     fontWeight: 900,
   },
 
-  daysGrid: {
+  medicoCalendarWrap: {
+    background: "#0b1528",
+    border: "1px solid #1e293b",
+    borderRadius: 18,
+    padding: 14,
+    marginBottom: 22,
+  },
+
+  medicoCalendarGrid: {
     display: "grid",
     gridTemplateColumns: "repeat(auto-fill, minmax(120px, 1fr))",
     gap: 10,
   },
 
-  dayCard: {
-    background: "#0b1528",
-    borderRadius: 10,
-    padding: "10px 8px",
+  medicoDayCard: {
+    background: "#111827",
+    borderRadius: 12,
+    padding: 10,
+    minHeight: 118,
   },
 
-  dayLabel: (esHoy, esFin) => ({
+  medicoDayHead: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 8,
+  },
+
+  medicoDayName: {
+    color: "#64748b",
     fontSize: 10,
-    color: esHoy ? "#60a5fa" : esFin ? "#9ca3af" : "#6b7280",
-    fontWeight: 800,
+    fontWeight: 900,
     textTransform: "capitalize",
-    marginBottom: 6,
+  },
+
+  medicoDayNumber: {
+    color: "#e5e7eb",
+    fontSize: 18,
+    fontWeight: 900,
+  },
+
+  medicoShiftList: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 5,
+  },
+
+  medicoFreeChip: {
+    background: "#020617",
+    color: "#94a3b8",
+    border: "1px dashed #334155",
+    borderRadius: 8,
+    padding: "5px 7px",
+    fontSize: 11,
+    fontWeight: 800,
+    display: "flex",
+    gap: 4,
+  },
+
+  medicoShiftChip: (tipo) => ({
+    background: tipo.bg,
+    color: tipo.color,
+    borderRadius: 8,
+    padding: "5px 7px",
+    fontSize: 11,
+    fontWeight: 900,
+    display: "flex",
+    alignItems: "center",
+    gap: 4,
+    border: `1px solid ${tipo.color}33`,
   }),
+
+  medicoExtraChip: {
+    background: "#1f2937",
+    color: "#e5e7eb",
+    borderRadius: 8,
+    padding: "5px 7px",
+    fontSize: 11,
+    fontWeight: 900,
+    display: "flex",
+    alignItems: "center",
+    gap: 4,
+    border: "1px solid #374151",
+  },
+
+  medicoDayTotal: {
+    marginTop: 8,
+    paddingTop: 6,
+    borderTop: "1px solid #1f2937",
+    color: "#94a3b8",
+    fontSize: 10,
+    fontWeight: 900,
+  },
 
   turnoLibre: {
     background: "#111827",
@@ -2815,12 +3841,6 @@ const S = {
     padding: "5px 7px",
     fontSize: 11,
     fontWeight: 900,
-  },
-
-  dayTotal: {
-    marginTop: 8,
-    color: "#94a3b8",
-    fontSize: 11,
   },
 
   coordLayout: {
@@ -2999,6 +4019,103 @@ const S = {
     fontSize: 15,
     fontWeight: 900,
     marginBottom: 14,
+  },
+
+  sectionHeader: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    gap: 12,
+    marginBottom: 14,
+  },
+
+  sectionTitle: {
+    margin: 0,
+    color: "#f1f5f9",
+    fontSize: 20,
+    fontWeight: 900,
+  },
+
+  sectionSub: {
+    color: "#64748b",
+    fontSize: 13,
+    margin: "5px 0 0",
+  },
+
+  solicitudesMedicoSection: {
+    marginTop: 26,
+  },
+
+  solicitudesGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+    gap: 14,
+  },
+
+  solicitudCard: {
+    background: "#0b1528",
+    border: "1px solid #1e293b",
+    borderRadius: 16,
+    padding: 16,
+  },
+
+  solicitudTitle: {
+    color: "#f1f5f9",
+    fontSize: 15,
+    fontWeight: 900,
+    marginBottom: 5,
+  },
+
+  solicitudSub: {
+    color: "#64748b",
+    fontSize: 12,
+    lineHeight: 1.5,
+    marginBottom: 12,
+  },
+
+  solicitudRow: {
+    display: "grid",
+    gridTemplateColumns: "1fr 1fr",
+    gap: 10,
+    marginBottom: 10,
+  },
+
+  windowBadge: {
+    borderRadius: 10,
+    padding: "9px 10px",
+    fontSize: 12,
+    fontWeight: 900,
+    marginBottom: 12,
+  },
+
+  historialSolicitudes: {
+    marginTop: 16,
+    background: "#0b1528",
+    border: "1px solid #1e293b",
+    borderRadius: 16,
+    padding: 16,
+  },
+
+  miniSolicitud: {
+    background: "#111827",
+    border: "1px solid #1f2937",
+    borderRadius: 12,
+    padding: 10,
+    display: "flex",
+    alignItems: "center",
+    gap: 10,
+  },
+
+  miniSolicitudTitle: {
+    color: "#f1f5f9",
+    fontWeight: 900,
+    fontSize: 12,
+  },
+
+  miniSolicitudSub: {
+    color: "#64748b",
+    fontSize: 11,
+    marginTop: 2,
   },
 
   miniTitle: {
@@ -3232,17 +4349,6 @@ const S = {
     zIndex: 2,
   },
 
-  turnoBtn: (tipo) => ({
-    background: tipo.bg,
-    color: tipo.color,
-    border: "none",
-    borderRadius: 6,
-    padding: "4px 6px",
-    fontSize: 10,
-    fontWeight: 900,
-    cursor: "pointer",
-  }),
-
   miniSelect: {
     background: "#111827",
     color: "#f1f5f9",
@@ -3250,15 +4356,6 @@ const S = {
     borderRadius: 6,
     padding: 4,
     fontSize: 10,
-  },
-
-  extraMini: {
-    background: "#1f2937",
-    color: "#f1f5f9",
-    borderRadius: 6,
-    padding: "3px 5px",
-    fontSize: 10,
-    fontWeight: 800,
   },
 
   calendarShell: {
@@ -3448,5 +4545,19 @@ const S = {
     color: "#64748b",
     fontSize: 11,
     marginTop: 4,
+  },
+
+  reqDetails: {
+    color: "#cbd5e1",
+    fontSize: 12,
+    lineHeight: 1.7,
+    marginTop: 10,
+  },
+
+  requestActions: {
+    display: "flex",
+    gap: 8,
+    flexWrap: "wrap",
+    marginTop: 12,
   },
 };
