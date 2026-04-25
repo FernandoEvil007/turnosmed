@@ -4,6 +4,7 @@ body,
   min-height: 100%;
   margin: 0;
   overflow-x: hidden;
+  background: #020617;
 }
 
 * {
@@ -14,12 +15,26 @@ button,
 input,
 select,
 textarea {
-  font-size: 15px;
+  font-family: inherit;
 }
 
-/* =========================================================
-   BASE GENERAL
-   ========================================================= */
+button {
+  -webkit-tap-highlight-color: transparent;
+}
+
+button:hover {
+  filter: brightness(1.08);
+}
+
+button:active {
+  transform: scale(0.98);
+}
+
+input,
+select,
+textarea {
+  font-size: 15px;
+}
 
 .tm-login-card,
 .tm-card,
@@ -31,9 +46,29 @@ textarea {
   max-width: 100%;
 }
 
+/* Scroll estético del calendario */
+
+.tm-calendar-scroll::-webkit-scrollbar {
+  height: 10px;
+}
+
+.tm-calendar-scroll::-webkit-scrollbar-track {
+  background: #020617;
+  border-radius: 999px;
+}
+
+.tm-calendar-scroll::-webkit-scrollbar-thumb {
+  background: #334155;
+  border-radius: 999px;
+}
+
+.tm-calendar-scroll::-webkit-scrollbar-thumb:hover {
+  background: #475569;
+}
+
 /* =========================================================
    COMPUTADOR GRANDE
-   Mantiene menú lateral, buena separación y varias columnas
+   Mantiene menú lateral, columnas amplias y calendario grande
    ========================================================= */
 
 @media (min-width: 1025px) {
@@ -84,7 +119,7 @@ textarea {
 
 /* =========================================================
    TABLET
-   Menú superior, 2 columnas cuando sea posible
+   Menú superior compacto, formularios en 2 columnas
    ========================================================= */
 
 @media (min-width: 769px) and (max-width: 1024px) {
@@ -94,6 +129,7 @@ textarea {
 
   .tm-sidebar {
     width: 100% !important;
+    min-height: auto !important;
     position: sticky !important;
     top: 0 !important;
     z-index: 50 !important;
@@ -115,7 +151,7 @@ textarea {
   .tm-sidebar-bottom {
     margin-top: 12px !important;
     display: grid !important;
-    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
     gap: 8px !important;
   }
 
@@ -162,7 +198,7 @@ textarea {
   }
 
   .tm-calendar-table {
-    min-width: 1000px !important;
+    min-width: 1050px !important;
   }
 
   .tm-simple-header,
@@ -186,9 +222,8 @@ textarea {
   }
 
   .tm-page-center {
-    padding: 16px !important;
-    justify-content: flex-start !important;
-    padding-top: 28px !important;
+    padding: 24px 16px 78px !important;
+    justify-content: center !important;
   }
 
   .tm-login-card {
@@ -206,6 +241,7 @@ textarea {
   .tm-sidebar {
     width: 100% !important;
     height: auto !important;
+    min-height: auto !important;
     position: sticky !important;
     top: 0 !important;
     z-index: 50 !important;
@@ -222,6 +258,11 @@ textarea {
     display: grid !important;
     grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
     gap: 8px !important;
+  }
+
+  .tm-side-nav button {
+    min-height: 44px !important;
+    justify-content: flex-start !important;
   }
 
   .tm-sidebar-bottom {
@@ -284,10 +325,12 @@ textarea {
     overflow-x: auto !important;
     -webkit-overflow-scrolling: touch !important;
     border-radius: 12px !important;
+    margin-left: -2px !important;
+    margin-right: -2px !important;
   }
 
   .tm-calendar-table {
-    min-width: 900px !important;
+    min-width: 980px !important;
   }
 
   .tm-simple-header {
@@ -352,5 +395,9 @@ textarea {
 
   .tm-page-title {
     font-size: 19px !important;
+  }
+
+  .tm-calendar-table {
+    min-width: 940px !important;
   }
 }

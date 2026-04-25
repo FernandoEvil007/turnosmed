@@ -1900,107 +1900,189 @@ function VistaCalendario({
 }) {
   return (
     <section>
-      <PageHeader title="Calendario" sub="Gestión mensual de turnos" />
-
-      <div className="tm-month-selector" style={S.monthSelector}>
-        <button type="button" onClick={() => navMes(-1, setYear, setMonth, year, month)} style={S.bnav}>
-          ‹
-        </button>
-
-        <span className="tm-month-title" style={S.monthTitle}>
-          {capFirst(mesLabel(year, month))}
-        </span>
-
-        <button type="button" onClick={() => navMes(1, setYear, setMonth, year, month)} style={S.bnav}>
-          ›
-        </button>
+      <div className="tm-page-header" style={S.pageHeader}>
+        <div>
+          <h1 className="tm-page-title" style={S.pageTitle}>
+            📅 Calendario de turnos
+          </h1>
+          <p style={S.pageSubtitle}>
+            Gestión mensual de turnos médicos por profesional y fecha.
+          </p>
+        </div>
       </div>
 
-      <div className="tm-calendar-scroll" style={S.calendarScroll}>
-        <table className="tm-calendar-table" style={S.calendarTable}>
-          <thead>
-            <tr>
-              <th style={S.th}>Médico</th>
+      <div style={S.calendarShell}>
+        <div style={S.calendarTop}>
+          <button
+            type="button"
+            onClick={() => navMes(-1, setYear, setMonth, year, month)}
+            style={S.bnav}
+            title="Mes anterior"
+          >
+            ‹
+          </button>
 
-              {diasCoord.map((d) => (
-                <th key={isoDate(d)} style={S.th}>
-                  {diaLabel(d)}
-                </th>
-              ))}
-            </tr>
-          </thead>
+          <div>
+            <div className="tm-month-title" style={S.calendarMonthTitle}>
+              {capFirst(mesLabel(year, month))}
+            </div>
+            <div style={S.calendarMonthSub}>🗓️ Vista mensual de programación</div>
+          </div>
 
-          <tbody>
-            {medicos.map((med) => (
-              <tr key={med.id}>
-                <td style={S.tdSticky}>
-                  <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                    <Av color={med.color} size={30} fontSize={11}>
-                      {med.nombre?.[0]}
-                      {med.apellido?.[0]}
-                    </Av>
+          <button
+            type="button"
+            onClick={() => navMes(1, setYear, setMonth, year, month)}
+            style={S.bnav}
+            title="Mes siguiente"
+          >
+            ›
+          </button>
+        </div>
 
-                    <div>
-                      <div style={S.medNameSmall}>
-                        {med.nombre} {med.apellido}
-                      </div>
-                      <div style={S.metaTiny}>{med.especialidad}</div>
-                    </div>
-                  </div>
-                </td>
+        <div style={S.calendarLegend}>
+          <span style={{ ...S.legendPill, background: "#1e3a5f", color: "#60a5fa" }}>
+            ☀️ Día · 8h
+          </span>
+          <span style={{ ...S.legendPill, background: "#3d2c00", color: "#fbbf24" }}>
+            🌥️ Cenizo · 3h
+          </span>
+          <span style={{ ...S.legendPill, background: "#2e1b5e", color: "#c4b5fd" }}>
+            📅 Fin de semana · 6h
+          </span>
+          <span style={{ ...S.legendPill, background: "#1f2937", color: "#e5e7eb" }}>
+            ➕ Horas extra
+          </span>
+          <span style={{ ...S.legendPill, background: "#0f172a", color: "#94a3b8" }}>
+            🏖️ Libre
+          </span>
+        </div>
+
+        <div className="tm-calendar-scroll" style={S.calendarScroll}>
+          <table className="tm-calendar-table" style={S.calendarTable}>
+            <thead>
+              <tr>
+                <th style={{ ...S.th, ...S.thMedico }}>👨‍⚕️ Médico</th>
 
                 {diasCoord.map((d) => {
                   const f = isoDate(d);
-                  const tipos = turnosDiaOrdenados(getTurnosDia(med.id, f));
-                  const extra = getHorasExtraDia(med.id, f);
-                  const total = horasDiaTotal(med.id, f);
+                  const esHoy = f === HOY_ISO;
+                  const esFin = isWE(d);
 
                   return (
-                    <td key={f} style={S.td}>
-                      <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-                        {tipos.length === 0 && <span style={S.metaTiny}>Libre</span>}
-
-                        {tipos.map((tipo) => (
-                          <button
-                            type="button"
-                            key={tipo}
-                            onClick={() => eliminarTurnoCoord(med.id, f, tipo)}
-                            style={S.turnoBtn(TIPOS_TURNO[tipo])}
-                            title="Clic para eliminar"
-                          >
-                            {TIPOS_TURNO[tipo].label}
-                          </button>
-                        ))}
-
-                        <select
-                          value=""
-                          onChange={(e) => {
-                            if (e.target.value) {
-                              agregarTurnoCoord(med.id, f, e.target.value);
-                            }
-                          }}
-                          style={S.miniSelect}
-                        >
-                          <option value="">+</option>
-
-                          {Object.keys(TIPOS_TURNO).map((k) => (
-                            <option key={k} value={k}>
-                              {TIPOS_TURNO[k].label}
-                            </option>
-                          ))}
-                        </select>
-
-                        {extra > 0 && <span style={S.extraMini}>+{extra}h</span>}
-
-                        <span style={S.metaTiny}>{total}h</span>
+                    <th
+                      key={f}
+                      style={{
+                        ...S.th,
+                        ...(esHoy ? S.thHoy : {}),
+                        ...(esFin ? S.thFinSemana : {}),
+                      }}
+                    >
+                      <div style={S.calendarDayHeader}>
+                        <span>{esHoy ? "⭐" : esFin ? "🌙" : "📍"}</span>
+                        <span>{diaLabel(d)}</span>
                       </div>
-                    </td>
+                    </th>
                   );
                 })}
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+
+            <tbody>
+              {medicos.map((med) => (
+                <tr key={med.id}>
+                  <td style={S.tdSticky}>
+                    <div style={S.medicoCalendarCell}>
+                      <Av color={med.color} size={34} fontSize={12}>
+                        {med.nombre?.[0]}
+                        {med.apellido?.[0]}
+                      </Av>
+
+                      <div style={{ minWidth: 0 }}>
+                        <div style={S.medNameSmall}>
+                          {med.nombre} {med.apellido}
+                        </div>
+                        <div style={S.metaTiny}>🩺 {med.especialidad}</div>
+                      </div>
+                    </div>
+                  </td>
+
+                  {diasCoord.map((d) => {
+                    const f = isoDate(d);
+                    const tipos = turnosDiaOrdenados(getTurnosDia(med.id, f));
+                    const extra = getHorasExtraDia(med.id, f);
+                    const total = horasDiaTotal(med.id, f);
+                    const esHoy = f === HOY_ISO;
+                    const esFin = isWE(d);
+
+                    return (
+                      <td
+                        key={f}
+                        style={{
+                          ...S.td,
+                          ...(esHoy ? S.tdHoy : {}),
+                          ...(esFin ? S.tdFinSemana : {}),
+                        }}
+                      >
+                        <div style={S.calendarCellInner}>
+                          {tipos.length === 0 && (
+                            <div style={S.emptyShift}>
+                              <span>🏖️</span>
+                              <span>Libre</span>
+                            </div>
+                          )}
+
+                          {tipos.map((tipo) => (
+                            <button
+                              type="button"
+                              key={tipo}
+                              onClick={() => eliminarTurnoCoord(med.id, f, tipo)}
+                              style={S.turnoPill(TIPOS_TURNO[tipo])}
+                              title="Clic para eliminar turno"
+                            >
+                              <span>{TIPOS_TURNO[tipo].emoji}</span>
+                              <span>{TIPOS_TURNO[tipo].label}</span>
+                            </button>
+                          ))}
+
+                          {extra > 0 && (
+                            <div style={S.extraPill}>
+                              <span>➕</span>
+                              <span>{extra}h extra</span>
+                            </div>
+                          )}
+
+                          <div style={S.addSelectWrap}>
+                            <span style={S.addSelectLabel}>Agregar</span>
+
+                            <select
+                              value=""
+                              onChange={(e) => {
+                                if (e.target.value) {
+                                  agregarTurnoCoord(med.id, f, e.target.value);
+                                }
+                              }}
+                              style={S.miniSelect}
+                            >
+                              <option value="">＋</option>
+
+                              {Object.keys(TIPOS_TURNO).map((k) => (
+                                <option key={k} value={k}>
+                                  {TIPOS_TURNO[k].emoji} {TIPOS_TURNO[k].label}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+
+                          <div style={S.totalPill}>⏱️ {total}h</div>
+                        </div>
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
     </section>
   );
@@ -2400,7 +2482,7 @@ const S = {
     alignItems: "center",
     justifyContent: "center",
     flexDirection: "column",
-    padding: 24,
+    padding: "24px 24px 64px",
     boxSizing: "border-box",
     fontFamily:
       'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
@@ -2416,11 +2498,11 @@ const S = {
 
   creditBadge: {
     position: "fixed",
-    top: 12,
+    bottom: 12,
     left: 12,
     zIndex: 20,
     maxWidth: "calc(100vw - 24px)",
-    background: "rgba(15, 23, 42, 0.82)",
+    background: "rgba(15, 23, 42, 0.86)",
     border: "1px solid rgba(148, 163, 184, 0.18)",
     borderRadius: 999,
     color: "#94a3b8",
@@ -3177,6 +3259,168 @@ const S = {
     padding: "3px 5px",
     fontSize: 10,
     fontWeight: 800,
+  },
+
+  calendarShell: {
+    background: "#0b1528",
+    border: "1px solid #1e293b",
+    borderRadius: 18,
+    padding: 16,
+    boxShadow: "0 20px 60px rgba(0,0,0,0.20)",
+  },
+
+  calendarTop: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+    marginBottom: 14,
+    flexWrap: "wrap",
+  },
+
+  calendarMonthTitle: {
+    color: "#f1f5f9",
+    fontSize: 18,
+    fontWeight: 900,
+    textTransform: "capitalize",
+    letterSpacing: "-0.3px",
+  },
+
+  calendarMonthSub: {
+    color: "#64748b",
+    fontSize: 12,
+    marginTop: 3,
+  },
+
+  calendarLegend: {
+    display: "flex",
+    gap: 8,
+    flexWrap: "wrap",
+    marginBottom: 14,
+  },
+
+  legendPill: {
+    borderRadius: 999,
+    padding: "7px 10px",
+    fontSize: 11,
+    fontWeight: 900,
+    border: "1px solid rgba(255,255,255,0.06)",
+  },
+
+  thMedico: {
+    position: "sticky",
+    left: 0,
+    zIndex: 4,
+    minWidth: 230,
+  },
+
+  thHoy: {
+    background: "#102a4c",
+    color: "#bfdbfe",
+  },
+
+  thFinSemana: {
+    background: "#111827",
+    color: "#c4b5fd",
+  },
+
+  calendarDayHeader: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 4,
+    minWidth: 70,
+    textTransform: "capitalize",
+  },
+
+  medicoCalendarCell: {
+    display: "flex",
+    gap: 9,
+    alignItems: "center",
+  },
+
+  calendarCellInner: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 6,
+    minHeight: 116,
+  },
+
+  tdHoy: {
+    background: "rgba(37, 99, 235, 0.08)",
+  },
+
+  tdFinSemana: {
+    background: "rgba(124, 58, 237, 0.06)",
+  },
+
+  emptyShift: {
+    background: "#111827",
+    color: "#94a3b8",
+    borderRadius: 9,
+    padding: "6px 7px",
+    fontSize: 11,
+    fontWeight: 800,
+    display: "flex",
+    justifyContent: "center",
+    alignItems: "center",
+    gap: 4,
+    border: "1px dashed #334155",
+  },
+
+  turnoPill: (tipo) => ({
+    background: tipo.bg,
+    color: tipo.color,
+    border: `1px solid ${tipo.color}33`,
+    borderRadius: 9,
+    padding: "6px 7px",
+    fontSize: 11,
+    fontWeight: 900,
+    cursor: "pointer",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 5,
+    boxShadow: "0 8px 20px rgba(0,0,0,0.14)",
+  }),
+
+  extraPill: {
+    background: "#1f2937",
+    color: "#e5e7eb",
+    border: "1px solid #374151",
+    borderRadius: 9,
+    padding: "5px 7px",
+    fontSize: 10,
+    fontWeight: 900,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 4,
+  },
+
+  addSelectWrap: {
+    display: "grid",
+    gridTemplateColumns: "1fr auto",
+    gap: 5,
+    alignItems: "center",
+    marginTop: "auto",
+  },
+
+  addSelectLabel: {
+    color: "#64748b",
+    fontSize: 9,
+    fontWeight: 800,
+  },
+
+  totalPill: {
+    background: "#020617",
+    color: "#cbd5e1",
+    border: "1px solid #1e293b",
+    borderRadius: 999,
+    padding: "4px 7px",
+    fontSize: 10,
+    fontWeight: 900,
+    textAlign: "center",
   },
 
   rowBetween: {
