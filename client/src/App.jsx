@@ -2442,6 +2442,12 @@ function SolicitudesMedico({
 
   const next = getNextMonthInfo();
   const disponibleHorario = estaEnUltimos7DiasDelMes();
+  const cambioListo =
+    !!solCambioForm.turno_origen &&
+    !!solCambioForm.medico_destino_id &&
+    !!solCambioForm.turno_destino;
+  const cesionListo = !!solCesionForm.turno_origen && !!solCesionForm.medico_receptor_id;
+  const horarioListo = disponibleHorario && !!String(solHorarioForm.mensaje || "").trim();
 
   const misCambios = solicitudesCambioTurno
     .filter((s) => Number(s.medico_solicitante_id || s.medico_id) === Number(medicoActivo.id))
@@ -2482,7 +2488,10 @@ function SolicitudesMedico({
                 setSolCambioForm((p) => ({ ...p, turno_origen: e.target.value }))
               }
               options={[
-                { value: "", label: "— Seleccione —" },
+                {
+                  value: "",
+                  label: misTurnos.length ? "— Seleccione —" : "No tienes turnos este mes",
+                },
                 ...misTurnos.map((t) => ({ value: t.value, label: t.label })),
               ]}
             />
@@ -2517,7 +2526,9 @@ function SolicitudesMedico({
               {
                 value: "",
                 label: solCambioForm.medico_destino_id
-                  ? "— Seleccione turno —"
+                  ? turnosMedicoDestino.length
+                    ? "— Seleccione turno —"
+                    : "Ese médico no tiene turnos este mes"
                   : "Seleccione primero un médico",
               },
               ...turnosMedicoDestino,
@@ -2540,7 +2551,14 @@ function SolicitudesMedico({
           <button
             type="button"
             onClick={enviarSolicitudCambioTurno}
-            style={{ ...S.primaryButton, marginTop: 12, width: "100%" }}
+            disabled={!cambioListo}
+            style={{
+              ...S.primaryButton,
+              marginTop: 12,
+              width: "100%",
+              opacity: cambioListo ? 1 : 0.55,
+              cursor: cambioListo ? "pointer" : "not-allowed",
+            }}
           >
             Enviar solicitud de cambio
           </button>
@@ -2558,7 +2576,10 @@ function SolicitudesMedico({
                 setSolCesionForm((p) => ({ ...p, turno_origen: e.target.value }))
               }
               options={[
-                { value: "", label: "— Seleccione —" },
+                {
+                  value: "",
+                  label: misTurnos.length ? "— Seleccione —" : "No tienes turnos este mes",
+                },
                 ...misTurnos.map((t) => ({ value: t.value, label: t.label })),
               ]}
             />
@@ -2595,7 +2616,14 @@ function SolicitudesMedico({
           <button
             type="button"
             onClick={enviarSolicitudCesionTurno}
-            style={{ ...S.primaryButton, marginTop: 12, width: "100%" }}
+            disabled={!cesionListo}
+            style={{
+              ...S.primaryButton,
+              marginTop: 12,
+              width: "100%",
+              opacity: cesionListo ? 1 : 0.55,
+              cursor: cesionListo ? "pointer" : "not-allowed",
+            }}
           >
             Enviar solicitud de cesión
           </button>
@@ -2639,10 +2667,10 @@ function SolicitudesMedico({
               ...S.primaryButton,
               marginTop: 12,
               width: "100%",
-              opacity: disponibleHorario ? 1 : 0.55,
-              cursor: disponibleHorario ? "pointer" : "not-allowed",
+              opacity: horarioListo ? 1 : 0.55,
+              cursor: horarioListo ? "pointer" : "not-allowed",
             }}
-            disabled={!disponibleHorario}
+            disabled={!horarioListo}
           >
             Enviar solicitud de horario
           </button>
