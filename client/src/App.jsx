@@ -849,12 +849,15 @@ export default function App() {
           acc[tipo].horas += TIPOS_TURNO[tipo]?.horas || 0;
         });
 
+        acc.HORAS_EXTRA.horas += getHorasExtraDia(id, fecha);
+
         return acc;
       },
       {
         DIA: { cantidad: 0, horas: 0 },
         CENIZO: { cantidad: 0, horas: 0 },
         FDS: { cantidad: 0, horas: 0 },
+        HORAS_EXTRA: { cantidad: 0, horas: 0 },
       }
     );
   }
@@ -3000,6 +3003,9 @@ function ResumenTurnosMedico({ resumen }) {
     { tipo: "CENIZO", nombre: "Cenizos de 3 horas" },
     { tipo: "FDS", nombre: "Fines de semana" },
   ];
+  const totalBase = filas.reduce((acc, fila) => acc + Number(resumen?.[fila.tipo]?.horas || 0), 0);
+  const horasExtra = Number(resumen?.HORAS_EXTRA?.horas || 0);
+  const total = totalBase + horasExtra;
 
   return (
     <div className="tm-card" style={S.card}>
@@ -3026,6 +3032,16 @@ function ResumenTurnosMedico({ resumen }) {
             </Fragment>
           );
         })}
+
+        <div style={S.summaryCell}>
+          <span style={S.extraChip}>+ Horas adicionales aprobadas</span>
+        </div>
+        <div style={S.summaryCell}>-</div>
+        <div style={S.summaryCell}>{horasExtra}h</div>
+
+        <div style={{ ...S.summaryCell, ...S.summaryTotalCell }}>Total</div>
+        <div style={{ ...S.summaryCell, ...S.summaryTotalCell }}>-</div>
+        <div style={{ ...S.summaryCell, ...S.summaryTotalCell }}>{total}h</div>
       </div>
     </div>
   );
@@ -5405,6 +5421,12 @@ const S = {
     fontWeight: 800,
     display: "flex",
     alignItems: "center",
+  },
+
+  summaryTotalCell: {
+    background: "#0b1528",
+    color: "#f8fafc",
+    fontWeight: 950,
   },
 
   floorCheckGrid: {
