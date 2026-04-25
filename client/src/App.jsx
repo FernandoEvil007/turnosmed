@@ -3180,9 +3180,7 @@ function VistaMedicos({
   const administradores = usuarios.filter(
     (u) => u.rol === "coordinador" || u.rol === "administrador"
   );
-  const puedeGestionarAdministradores = usuarios.some(
-    (u) => Number(u.id) === Number(usuarioSesion?.id) && u.es_admin_principal
-  );
+  const puedeCrearAdministrador = administradores.length < 2;
   const medicoTieneAdmin = (medico) =>
     administradores.some(
       (u) =>
@@ -3203,7 +3201,6 @@ function VistaMedicos({
         }
       />
 
-      {puedeGestionarAdministradores && (
       <div className="tm-card" style={S.card}>
         <div style={S.secTitle}>Crear otro administrador</div>
 
@@ -3257,7 +3254,13 @@ function VistaMedicos({
         <button
           type="button"
           onClick={crearAdministrador}
-          style={{ ...S.primaryButton, marginTop: 12 }}
+          disabled={!puedeCrearAdministrador}
+          style={{
+            ...S.primaryButton,
+            marginTop: 12,
+            opacity: puedeCrearAdministrador ? 1 : 0.45,
+            cursor: puedeCrearAdministrador ? "pointer" : "not-allowed",
+          }}
         >
           Crear administrador
         </button>
@@ -3289,7 +3292,6 @@ function VistaMedicos({
           </div>
         </div>
       </div>
-      )}
 
       <div className="tm-card" style={S.card}>
         <div style={S.secTitle}>Crear acceso para médico</div>

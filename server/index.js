@@ -483,38 +483,6 @@ async function contarAdministradoresActivos() {
   return Number(row?.total || 0);
 }
 
-async function getAdministradorPrincipal() {
-  return get(
-    `
-    SELECT *
-    FROM usuarios
-    WHERE activo = 1
-      AND (rol = 'coordinador' OR rol = 'administrador' OR rol = 'admin')
-    ORDER BY id ASC
-    LIMIT 1
-    `
-  );
-}
-
-async function isAdministradorPrincipal(userId) {
-  const principal = await getAdministradorPrincipal();
-  return !!principal && Number(principal.id) === Number(userId);
-}
-
-function requireAdminPrincipal(req, res, next) {
-  requireAdmin(req, res, async () => {
-    try {
-      if (!(await isAdministradorPrincipal(req.auth?.id))) {
-        return fail(res, new Error("Solo el administrador principal puede gestionar administradores"), 403);
-      }
-
-      return next();
-    } catch (error) {
-      return fail(res, error);
-    }
-  });
-}
-
 async function buscarAdminActivoPorMedicoOCedula(medicoId, cedula) {
   const doc = toNull(cedula);
   const id = medicoId ? Number(medicoId) : null;
@@ -1131,24 +1099,13 @@ app.get("/usuarios", requireAdmin, async (req, res) => {
       `
     );
 
-    const esPrincipal = await isAdministradorPrincipal(req.auth?.id);
-    const visibles = esPrincipal
-      ? rows
-      : rows.filter((u) => !isAdminRol(u.rol) || Number(u.id) === Number(req.auth?.id));
-
-    return ok(
-      res,
-      visibles.map((u) => ({
-        ...publicUser(u),
-        es_admin_principal: esPrincipal && Number(u.id) === Number(req.auth?.id),
-      }))
-    );
+    return ok(res, rows.map(publicUser));
   } catch (error) {
     return fail(res, error);
   }
 });
 
-app.get("/administradores", requireAdminPrincipal, async (req, res) => {
+app.get("/administradores", requireAdmin, async (req, res) => {
   try {
     const rows = await all(
       `
@@ -1186,12 +1143,12 @@ app.post("/usuarios", requireAdmin, async (req, res) => {
       return fail(res, new Error("Usuario y contraseÃ±a son obligatorios"), 400);
     }
 
-    if (rol === "coordinador" && !(await isAdministradorPrincipal(req.auth?.id))) {
-      return fail(res, new Error("Solo el administrador principal puede crear administradores"), 403);
-    }
-
     if (rol === "medico" && !medico_id) {
       return fail(res, new Error("El usuario mÃ©dico debe estar vinculado a un mÃ©dico"), 400);
+    }
+
+    if (rol === "coordinador" && (await contarAdministradoresActivos()) >= 2) {
+      return fail(res, new Error("No puede haber mÃ¡s de 2 administradores activos"), 400);
     }
 
     if (rol === "coordinador" && !medico_id && cedula) {
@@ -1289,11 +1246,8 @@ app.put("/usuarios/:id", requireAdmin, async (req, res) => {
       return fail(res, new Error("El usuario es obligatorio"), 400);
     }
 
-    if (
-      (isAdminRol(usuarioActual.rol) || isAdminRol(rol)) &&
-      !(await isAdministradorPrincipal(req.auth?.id))
-    ) {
-      return fail(res, new Error("Solo el administrador principal puede modificar administradores"), 403);
+    if (!isAdminRol(usuarioActual.rol) && isAdminRol(rol) && (await contarAdministradoresActivos()) >= 2) {
+      return fail(res, new Error("No puede haber mÃ¡s de 2 administradores activos"), 400);
     }
 
     if (medico_id) {
@@ -1360,10 +1314,6 @@ app.put("/usuarios/:id/reset-password", requireAdmin, async (req, res) => {
       return fail(res, new Error("Usuario no encontrado"), 404);
     }
 
-    if (isAdminRol(usuario.rol) && !(await isAdministradorPrincipal(req.auth?.id))) {
-      return fail(res, new Error("Solo el administrador principal puede resetear administradores"), 403);
-    }
-
     await updateUserPassword(id, nuevaPassword);
 
     return ok(res, {
@@ -1390,10 +1340,6 @@ app.delete("/usuarios/:id", requireAdmin, async (req, res) => {
     }
 
     if (isAdminRol(usuario.rol)) {
-      if (!(await isAdministradorPrincipal(req.auth?.id))) {
-        return fail(res, new Error("Solo el administrador principal puede eliminar administradores"), 403);
-      }
-
       const totalAdmins = await contarAdministradoresActivos();
 
       if (totalAdmins <= 1) {
@@ -1412,7 +1358,7 @@ app.delete("/usuarios/:id", requireAdmin, async (req, res) => {
   }
 });
 
-app.delete("/administradores/:id", requireAdminPrincipal, async (req, res) => {
+app.delete("/administradores/:id", requireAdmin, async (req, res) => {
   try {
     const id = Number(req.params.id);
 
