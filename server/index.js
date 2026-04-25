@@ -286,6 +286,17 @@ function nombreArchivoSeguro(texto) {
     .slice(0, 90);
 }
 
+function esFernandoRodriguezBayona(medico) {
+  const nombre = `${medico?.nombre || ""} ${medico?.apellido || ""}`
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toUpperCase();
+
+  return nombre === "FERNANDO RODRIGUEZ BAYONA";
+}
+
 function base64url(input) {
   return Buffer.from(input)
     .toString("base64")
@@ -2584,6 +2595,10 @@ app.get("/medicos/:id/cuenta-cobro", requireAuth, async (req, res) => {
     sheet.getCell("D38").value = { formula: "D34*D36" };
     sheet.getCell("B44").value = nombreMedico;
     sheet.getCell("B45").value = `${medico.tipo_doc || "CC"}: ${medico.documento || ""}`;
+
+    if (!esFernandoRodriguezBayona(medico) && Array.isArray(sheet._media)) {
+      sheet._media = sheet._media.filter((media) => media.type !== "image");
+    }
 
     [
       { row: 14, dias: resumen.DIA },
