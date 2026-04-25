@@ -9,8 +9,6 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 const DB_PATH = process.env.DB_PATH || path.join(__dirname, "database.sqlite");
 
-const ADMIN_CEDULA_FIJA = process.env.ADMIN_CEDULA_FIJA || "6662672";
-const ADMIN_PASSWORD_FIJA = process.env.ADMIN_PASSWORD_FIJA || "6662672";
 const AUTH_SECRET =
   process.env.AUTH_SECRET || crypto.createHash("sha256").update(`${DB_PATH}:turnosmed`).digest("hex");
 
@@ -305,7 +303,6 @@ function buildAuthResponse(usuario, medico = null, overrides = {}) {
       rol: normalizeRol(safeUser.rol),
       medico_id: safeUser.medico_id || null,
       cedula: safeUser.cedula || null,
-      admin_fijo: !!safeUser.admin_fijo,
     }),
   };
 }
@@ -778,30 +775,6 @@ app.post("/login-admin", async (req, res) => {
       return fail(res, new Error("CÃ©dula y contraseÃ±a son obligatorias"), 400);
     }
 
-    if (cedula === ADMIN_CEDULA_FIJA && password === ADMIN_PASSWORD_FIJA) {
-      const medicoAdmin = await buscarMedicoPorDocumento(ADMIN_CEDULA_FIJA);
-
-      return ok(
-        res,
-        buildAuthResponse(
-          {
-            id: 0,
-            username: "Fernando Rodriguez Bayona",
-            nombre: "Fernando Rodriguez Bayona",
-            rol: "coordinador",
-            medico_id: medicoAdmin?.id || null,
-            cedula: ADMIN_CEDULA_FIJA,
-            activo: 1,
-            admin_fijo: true,
-            es_admin: true,
-            es_medico: !!medicoAdmin,
-          },
-          medicoAdmin || null,
-          { admin_fijo: true, es_admin: true, es_medico: !!medicoAdmin }
-        )
-      );
-    }
-
     const usuario = await get(
       `
       SELECT *
@@ -1114,23 +1087,7 @@ app.get("/administradores", async (req, res) => {
       `
     );
 
-    const adminFijoMedico = await buscarMedicoPorDocumento(ADMIN_CEDULA_FIJA);
-
-    const adminFijo = {
-      id: 0,
-      username: "Fernando Rodriguez Bayona",
-      rol: "coordinador",
-      medico_id: adminFijoMedico?.id || null,
-      cedula: ADMIN_CEDULA_FIJA,
-      nombre: "Fernando Rodriguez Bayona",
-      activo: 1,
-      created_at: null,
-      admin_fijo: true,
-      es_admin: true,
-      es_medico: !!adminFijoMedico,
-    };
-
-    return ok(res, [adminFijo, ...rows.map(publicUser)]);
+    return ok(res, rows.map(publicUser));
   } catch (error) {
     return fail(res, error);
   }
@@ -1353,10 +1310,6 @@ app.delete("/usuarios/:id", requireAdmin, async (req, res) => {
 app.delete("/administradores/:id", requireAdmin, async (req, res) => {
   try {
     const id = Number(req.params.id);
-
-    if (id === 0) {
-      return fail(res, new Error("No se puede eliminar el administrador principal fijo"), 400);
-    }
 
     if (!id) {
       return fail(res, new Error("ID invÃ¡lido"), 400);

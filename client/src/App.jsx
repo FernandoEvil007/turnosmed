@@ -7,8 +7,6 @@ import "./App.css";
 const API_URL =
   import.meta.env.VITE_API_URL || "https://turnosmed-backend.onrender.com";
 
-const ADMIN_CEDULA_FIJA = "6662672";
-
 const PANTALLAS = {
   SELECTOR: "selector",
   MEDICO: "medico",
@@ -1000,10 +998,6 @@ export default function App() {
       return;
     }
 
-    if (cedula === ADMIN_CEDULA_FIJA) {
-      showToast("Esa cédula ya corresponde al administrador principal", "err");
-      return;
-    }
 
     try {
       await api("/usuarios", {
@@ -1029,10 +1023,6 @@ export default function App() {
   }
 
   async function eliminarAdministrador(id) {
-    if (Number(id) === 0) {
-      showToast("No se puede eliminar el administrador principal fijo", "err");
-      return;
-    }
 
     const confirmado = window.confirm("¿Seguro que deseas eliminar este administrador?");
     if (!confirmado) return;
@@ -3265,11 +3255,6 @@ function VistaMedicos({
           <div style={S.miniTitle}>Administradores registrados</div>
 
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            <div className="tm-admin-row" style={S.adminRow}>
-              <span>Fernando Rodriguez Bayona</span>
-              <span>Cédula {ADMIN_CEDULA_FIJA}</span>
-              <span>Administrador principal fijo</span>
-            </div>
 
             {administradores.map((u) => (
               <div key={u.id} className="tm-admin-row" style={S.adminRow}>
