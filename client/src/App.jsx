@@ -3,7 +3,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 /* ============================================================================
    CONFIG
 ============================================================================ */
-const API_URL = import.meta.env.VITE_API_URL;
+const API_URL =
+  import.meta.env.VITE_API_URL || "https://turnosmed-backend.onrender.com";
+  console.log("API_URL usada por la app:", API_URL);
 
 const PANTALLAS = {
   SELECTOR: "selector",
