@@ -495,6 +495,7 @@ export default function App() {
   const [medicoExtraForm, setMedicoExtraForm] = useState(MEDICO_EXTRA_FORM0);
   const [pacienteForm, setPacienteForm] = useState(PACIENTE_FORM0);
   const [pacientesCargo, setPacientesCargo] = useState([]);
+  const [pacientesTodos, setPacientesTodos] = useState([]);
   const [userForm, setUserForm] = useState(USER_FORM0);
   const [adminForm, setAdminForm] = useState(ADMIN_FORM0);
   const [resetPassForm, setResetPassForm] = useState(RESET_PASS_FORM0);
@@ -563,10 +564,15 @@ export default function App() {
     }
 
     try {
-      const data = await api(`/pacientes-cargo?medico_id=${medicoId}`);
-      setPacientesCargo(Array.isArray(data) ? data : []);
+      const [propios, todos] = await Promise.all([
+        api(`/pacientes-cargo?medico_id=${medicoId}`),
+        api("/pacientes-cargo?todos=1"),
+      ]);
+      setPacientesCargo(Array.isArray(propios) ? propios : []);
+      setPacientesTodos(Array.isArray(todos) ? todos : []);
     } catch {
       setPacientesCargo([]);
+      setPacientesTodos([]);
     }
   }
 
@@ -764,6 +770,7 @@ export default function App() {
     setMedicoActivo(null);
     setUsuarioSesion(null);
     setPacientesCargo([]);
+    setPacientesTodos([]);
     setPacienteForm(PACIENTE_FORM0);
     limpiarLogin();
     localStorage.removeItem("authToken");
@@ -1855,6 +1862,7 @@ export default function App() {
               pacienteForm={pacienteForm}
               setPacienteForm={setPacienteForm}
               pacientesCargo={pacientesCargo}
+              pacientesTodos={pacientesTodos}
               crearPacienteCargo={crearPacienteCargo}
               eliminarPacienteCargo={eliminarPacienteCargo}
             />
@@ -2494,10 +2502,20 @@ function PacientesCargoMedico({
   pacienteForm,
   setPacienteForm,
   pacientesCargo,
+  pacientesTodos,
   crearPacienteCargo,
   eliminarPacienteCargo,
 }) {
   const piso = pisoMedicoLabel(medicoActivo);
+  const pacientesPorPiso = (pacientesTodos || []).reduce((acc, paciente) => {
+    const key = `${paciente.torre || "Sin torre"} / ${
+      paciente.piso ? String(paciente.piso).toUpperCase() : "Sin piso"
+    }`;
+
+    if (!acc[key]) acc[key] = [];
+    acc[key].push(paciente);
+    return acc;
+  }, {});
 
   return (
     <section style={S.solicitudesMedicoSection}>
@@ -2607,6 +2625,63 @@ function PacientesCargoMedico({
                 <span>
                   <b>Pendientes:</b> {paciente.pendientes || "Sin pendientes"}
                 </span>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="tm-card" style={S.card}>
+        <div style={S.cardHeaderBetween}>
+          <div>
+            <div style={S.secTitle}>Pacientes de otros pisos</div>
+            <div style={S.metaText}>Consulta general por piso y medico responsable</div>
+          </div>
+
+          <span style={S.badgeBlue}>
+            {(pacientesTodos || []).length} paciente{(pacientesTodos || []).length !== 1 ? "s" : ""}
+          </span>
+        </div>
+
+        {(pacientesTodos || []).length === 0 && (
+          <div style={S.emptyCard}>No hay pacientes registrados por otros medicos.</div>
+        )}
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          {Object.entries(pacientesPorPiso).map(([pisoNombre, pacientes]) => (
+            <div key={pisoNombre} style={S.patientFloorGroup}>
+              <div style={S.patientFloorTitle}>{pisoNombre}</div>
+
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
+                  gap: 12,
+                }}
+              >
+                {pacientes.map((paciente) => {
+                  const esPropio = Number(paciente.medico_id) === Number(medicoActivo.id);
+
+                  return (
+                    <div key={`todos-${paciente.id}`} style={S.patientCard}>
+                      <div style={S.patientBed}>Cama {paciente.cama}</div>
+                      <div style={S.patientName}>{paciente.nombre_paciente}</div>
+                      <div style={S.metaText}>
+                        Dr(a). {paciente.medico_nombre || ""} {paciente.medico_apellido || ""}
+                        {esPropio ? " · Mi lista" : ""}
+                      </div>
+
+                      <div style={S.infoRows}>
+                        <span>
+                          <b>Diagnostico:</b> {paciente.diagnostico || "Sin diagnostico"}
+                        </span>
+                        <span>
+                          <b>Pendientes:</b> {paciente.pendientes || "Sin pendientes"}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           ))}
@@ -5114,6 +5189,20 @@ const S = {
     color: "#f1f5f9",
     fontSize: 15,
     fontWeight: 900,
+  },
+
+  patientFloorGroup: {
+    background: "#081120",
+    border: "1px solid #1e293b",
+    borderRadius: 12,
+    padding: 12,
+  },
+
+  patientFloorTitle: {
+    color: "#bfdbfe",
+    fontSize: 13,
+    fontWeight: 900,
+    marginBottom: 10,
   },
 
   infoRows: {

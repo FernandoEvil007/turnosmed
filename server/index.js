@@ -1835,27 +1835,44 @@ app.get("/pacientes-cargo", requireAuth, async (req, res) => {
   try {
     await ensurePacientesCargoSchema();
 
+    const verTodos = String(req.query.todos || "").toLowerCase() === "1";
     const medico_id = Number(req.query.medico_id || req.auth?.medico_id);
 
-    if (!medico_id) {
+    if (!verTodos && !medico_id) {
       return fail(res, new Error("MÃ©dico requerido"), 400);
     }
 
-    if (!canManageMedico(req, medico_id)) {
+    if (!verTodos && !canManageMedico(req, medico_id)) {
       return fail(res, new Error("No puedes ver pacientes de otro mÃ©dico"), 403);
     }
 
     const rows = await all(
-      `
-      SELECT *
-      FROM pacientes_cargo
-      WHERE medico_id = ?
-      ORDER BY piso COLLATE NOCASE ASC,
-               cama COLLATE NOCASE ASC,
-               datetime(created_at) DESC,
-               id DESC
-      `,
-      [medico_id]
+      verTodos
+        ? `
+        SELECT
+          p.*,
+          m.nombre AS medico_nombre,
+          m.apellido AS medico_apellido,
+          m.especialidad AS medico_especialidad
+        FROM pacientes_cargo p
+        LEFT JOIN medicos m ON m.id = p.medico_id
+        ORDER BY p.torre COLLATE NOCASE ASC,
+                 p.piso COLLATE NOCASE ASC,
+                 m.apellido COLLATE NOCASE ASC,
+                 p.cama COLLATE NOCASE ASC,
+                 datetime(p.created_at) DESC,
+                 p.id DESC
+        `
+        : `
+        SELECT *
+        FROM pacientes_cargo
+        WHERE medico_id = ?
+        ORDER BY piso COLLATE NOCASE ASC,
+                 cama COLLATE NOCASE ASC,
+                 datetime(created_at) DESC,
+                 id DESC
+        `,
+      verTodos ? [] : [medico_id]
     );
 
     return ok(res, rows);
