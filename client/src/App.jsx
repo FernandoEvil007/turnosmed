@@ -3399,6 +3399,8 @@ function CalendarioGlobalMedicos({
 }) {
   const offset = diasProp[0]?.getDay() || 0;
   const celdasVacias = Array.from({ length: offset });
+  const [detalleDia, setDetalleDia] = useState(null);
+  const maxVisibles = 4;
 
   return (
     <section style={S.solicitudesMedicoSection}>
@@ -3409,89 +3411,159 @@ function CalendarioGlobalMedicos({
         </div>
       </div>
 
-      <div className="tm-month-selector" style={S.monthSelector}>
+      <div style={S.globalMonthBar}>
         <button
           type="button"
           onClick={() => navMes(-1, setPropYear, setPropMes, propYear, propMes)}
           style={S.bnav}
+          title="Mes anterior"
         >
           ‹
         </button>
-        <span className="tm-month-title" style={S.monthTitle}>
+        <div style={S.globalMonthTitle}>
           {capFirst(mesLabel(propYear, propMes))}
-        </span>
+        </div>
         <button
           type="button"
           onClick={() => navMes(1, setPropYear, setPropMes, propYear, propMes)}
           style={S.bnav}
+          title="Mes siguiente"
         >
           ›
         </button>
       </div>
 
       <div className="tm-medico-calendar-wrap" style={S.medicoCalendarWrap}>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(7, minmax(0, 1fr))", gap: 6, marginBottom: 8 }}>
-          {["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"].map((dia) => (
-            <div key={dia} style={S.globalWeekLabel}>
-              {dia}
+        <div style={S.globalCalendarViewport}>
+          <div style={S.globalCalendarInner}>
+            <div style={S.globalWeekGrid}>
+              {["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"].map((dia) => (
+                <div key={dia} style={S.globalWeekLabel}>
+                  {dia}
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
 
-        <div className="tm-global-calendar-grid" style={S.globalCalendarGrid}>
-          {celdasVacias.map((_, index) => (
-            <div key={`empty-${index}`} style={{ ...S.medicoDayCard, opacity: 0.25 }} />
-          ))}
+            <div className="tm-global-calendar-grid" style={S.globalCalendarGrid}>
+              {celdasVacias.map((_, index) => (
+                <div key={`empty-${index}`} style={S.globalEmptyDay} />
+              ))}
 
-          {diasProp.map((d) => {
-            const fecha = isoDate(d);
-            const asignados = medicos
-              .map((med) => ({
-                med,
-                tipos: turnosDiaOrdenados(getTurnosDia(med.id, fecha)),
-              }))
-              .filter((item) => item.tipos.length > 0);
+              {diasProp.map((d) => {
+                const fecha = isoDate(d);
+                const esHoy = fecha === HOY_ISO;
+                const asignados = medicos
+                  .map((med) => ({
+                    med,
+                    tipos: turnosDiaOrdenados(getTurnosDia(med.id, fecha)),
+                  }))
+                  .filter((item) => item.tipos.length > 0);
+                const visibles = asignados.slice(0, maxVisibles);
+                const ocultos = asignados.length - visibles.length;
 
-            return (
-              <div
-                key={fecha}
-                className="tm-medico-day-card"
-                style={{
-                  ...S.medicoDayCard,
-                  minHeight: 142,
-                  border: fecha === HOY_ISO ? "1px solid #3b82f6" : "1px solid #1f2937",
-                }}
-              >
-                <div style={S.medicoDayHead}>
-                  <span style={S.medicoDayName}>{diaLabel(d)}</span>
-                  <span style={S.medicoDayNumber}>{diaNumero(d)}</span>
-                </div>
-
-                <div style={S.globalDoctorList}>
-                  {asignados.length === 0 && <span style={S.medicoFreeChip}>Libre</span>}
-                  {asignados.map(({ med, tipos }) => (
-                    <div key={med.id} style={S.globalDoctorChip}>
-                      <Av color={med.color} size={24} fontSize={9}>
-                        {med.nombre?.[0]}
-                        {med.apellido?.[0]}
-                      </Av>
-                      <div style={{ minWidth: 0 }}>
-                        <div style={S.globalDoctorInitials}>
-                          {med.nombre?.[0]}
-                          {med.apellido?.[0]}
-                        </div>
-                        <div style={S.globalDoctorTurns}>
-                          {tipos.map((tipo) => TIPOS_TURNO[tipo]?.label).join(" + ")}
-                        </div>
-                      </div>
+                return (
+                  <div
+                    key={fecha}
+                    className="tm-medico-day-card"
+                    style={{ ...S.globalDayCard, ...(esHoy ? S.globalTodayCard : {}) }}
+                  >
+                    <div style={S.globalDayHead}>
+                      <span style={S.medicoDayName}>{diaLabel(d)}</span>
+                      <span style={S.globalDayNumber(esHoy)}>{diaNumero(d)}</span>
                     </div>
-                  ))}
-                </div>
-              </div>
-            );
-          })}
+
+                    <div style={S.globalDoctorList}>
+                      {asignados.length === 0 && <span style={S.medicoFreeChip}>Libre</span>}
+                      {visibles.map(({ med, tipos }) => {
+                        const nombre = `${med.nombre || ""} ${med.apellido || ""}`.trim();
+                        const detalle = `${nombre} · ${med.especialidad || "Sin especialidad"} · ${tipos
+                          .map((tipo) => TIPOS_TURNO[tipo]?.label)
+                          .filter(Boolean)
+                          .join(" + ")}`;
+
+                        return (
+                          <button
+                            key={med.id}
+                            type="button"
+                            title={detalle}
+                            onClick={() => setDetalleDia({ fecha, asignados })}
+                            style={S.globalDoctorChip}
+                          >
+                            <Av color={med.color} size={24} fontSize={9}>
+                              {med.nombre?.[0]}
+                              {med.apellido?.[0]}
+                            </Av>
+                            <div style={{ minWidth: 0 }}>
+                              <div style={S.globalDoctorInitials}>
+                                {med.nombre?.[0]}
+                                {med.apellido?.[0]}
+                              </div>
+                              <div style={S.globalDoctorTurns}>
+                                {tipos.map((tipo) => TIPOS_TURNO[tipo]?.label).join(" + ")}
+                              </div>
+                            </div>
+                          </button>
+                        );
+                      })}
+                      {ocultos > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => setDetalleDia({ fecha, asignados })}
+                          style={S.globalMoreButton}
+                        >
+                          +{ocultos} más
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
         </div>
       </div>
+
+      {detalleDia && (
+        <div style={S.modalBackdrop} onClick={() => setDetalleDia(null)}>
+          <div style={S.globalDetailModal} onClick={(e) => e.stopPropagation()}>
+            <div style={S.cardHeaderBetween}>
+              <div>
+                <div style={S.secTitle}>{fechaBonita(detalleDia.fecha)}</div>
+                <div style={S.metaText}>
+                  {detalleDia.asignados.length} médico{detalleDia.asignados.length !== 1 ? "s" : ""} de turno
+                </div>
+              </div>
+              <button type="button" onClick={() => setDetalleDia(null)} style={S.smallMutedBtn}>
+                Cerrar
+              </button>
+            </div>
+
+            <div style={S.globalModalList}>
+              {detalleDia.asignados.map(({ med, tipos }) => (
+                <div key={`modal-${med.id}`} style={S.globalModalRow}>
+                  <Av color={med.color} size={34} fontSize={12}>
+                    {med.nombre?.[0]}
+                    {med.apellido?.[0]}
+                  </Av>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={S.medName}>
+                      {med.nombre} {med.apellido}
+                    </div>
+                    <div style={S.metaText}>{med.especialidad || "Sin especialidad"}</div>
+                  </div>
+                  <div style={S.globalModalTurns}>
+                    {tipos.map((tipo) => (
+                      <span key={tipo} style={S.turnoChip(TIPOS_TURNO[tipo])}>
+                        {TIPOS_TURNO[tipo].emoji} {TIPOS_TURNO[tipo].label}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   );
 }
@@ -5696,10 +5768,44 @@ const S = {
     gap: 10,
   },
 
+  globalMonthBar: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 10,
+    flexWrap: "wrap",
+    marginBottom: 18,
+  },
+
+  globalMonthTitle: {
+    color: "#f8fafc",
+    fontSize: 20,
+    fontWeight: 950,
+    minWidth: 180,
+    textAlign: "center",
+    textTransform: "capitalize",
+  },
+
+  globalCalendarViewport: {
+    overflowX: "auto",
+    paddingBottom: 4,
+  },
+
+  globalCalendarInner: {
+    minWidth: 860,
+  },
+
+  globalWeekGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(7, minmax(0, 1fr))",
+    gap: 8,
+    marginBottom: 8,
+  },
+
   globalCalendarGrid: {
     display: "grid",
     gridTemplateColumns: "repeat(7, minmax(0, 1fr))",
-    gap: 10,
+    gap: 8,
   },
 
   globalWeekLabel: {
@@ -5709,10 +5815,52 @@ const S = {
     textAlign: "center",
   },
 
+  globalEmptyDay: {
+    background: "#111827",
+    border: "1px solid #1f2937",
+    borderRadius: 10,
+    minHeight: 132,
+    opacity: 0.25,
+  },
+
+  globalDayCard: {
+    background: "#111827",
+    border: "1px solid #1f2937",
+    borderRadius: 10,
+    padding: 8,
+    minHeight: 132,
+    overflow: "hidden",
+  },
+
+  globalTodayCard: {
+    border: "1px solid #60a5fa",
+    boxShadow: "0 0 0 1px rgba(96, 165, 250, 0.45), 0 0 24px rgba(59, 130, 246, 0.28)",
+  },
+
+  globalDayHead: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 6,
+  },
+
+  globalDayNumber: (active) => ({
+    color: active ? "#020617" : "#e5e7eb",
+    background: active ? "#60a5fa" : "transparent",
+    borderRadius: 999,
+    minWidth: 26,
+    height: 26,
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    fontSize: 16,
+    fontWeight: 950,
+  }),
+
   globalDoctorList: {
     display: "flex",
     flexDirection: "column",
-    gap: 6,
+    gap: 5,
   },
 
   globalDoctorChip: {
@@ -5722,8 +5870,13 @@ const S = {
     background: "#0b1528",
     border: "1px solid #1e293b",
     borderRadius: 9,
-    padding: "6px 7px",
+    color: "#e5e7eb",
+    padding: "5px 6px",
     minWidth: 0,
+    width: "100%",
+    minHeight: 36,
+    textAlign: "left",
+    cursor: "pointer",
   },
 
   globalDoctorInitials: {
@@ -5739,6 +5892,64 @@ const S = {
     whiteSpace: "nowrap",
     overflow: "hidden",
     textOverflow: "ellipsis",
+  },
+
+  globalMoreButton: {
+    background: "#12315a",
+    color: "#bfdbfe",
+    border: "1px solid #2563eb",
+    borderRadius: 8,
+    padding: "6px 8px",
+    fontSize: 11,
+    fontWeight: 900,
+    cursor: "pointer",
+    width: "100%",
+  },
+
+  modalBackdrop: {
+    position: "fixed",
+    inset: 0,
+    background: "rgba(2, 6, 23, 0.72)",
+    zIndex: 9999,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 20,
+  },
+
+  globalDetailModal: {
+    width: "min(640px, 100%)",
+    maxHeight: "82vh",
+    overflowY: "auto",
+    background: "#0b1528",
+    border: "1px solid #1e293b",
+    borderRadius: 14,
+    padding: 16,
+    boxShadow: "0 24px 80px rgba(0, 0, 0, 0.45)",
+  },
+
+  globalModalList: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 10,
+    marginTop: 14,
+  },
+
+  globalModalRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: 10,
+    background: "#111827",
+    border: "1px solid #1f2937",
+    borderRadius: 10,
+    padding: 10,
+  },
+
+  globalModalTurns: {
+    display: "flex",
+    gap: 6,
+    flexWrap: "wrap",
+    justifyContent: "flex-end",
   },
 
   medicoDayCard: {
