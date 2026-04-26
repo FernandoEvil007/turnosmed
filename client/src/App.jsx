@@ -204,6 +204,10 @@ function isWE(d) {
   return w === 0 || w === 6;
 }
 
+function lunesPrimeroOffset(d) {
+  return d ? (d.getDay() + 6) % 7 : 0;
+}
+
 function esFechaFinSemana(fecha) {
   if (!fecha) return false;
 
@@ -2550,7 +2554,17 @@ function ResponsiveStyles() {
       {`
         @media (min-width: 769px) {
           .tm-medico-week-row {
-            display: none !important;
+            display: grid !important;
+            grid-template-columns: repeat(7, minmax(0, 1fr)) !important;
+            gap: 10px !important;
+            margin-bottom: 8px !important;
+          }
+
+          .tm-medico-week-label {
+            text-align: center !important;
+            color: #94a3b8 !important;
+            font-size: 11px !important;
+            font-weight: 900 !important;
           }
         }
 
@@ -2775,6 +2789,8 @@ function MedicoCalendarioCompacto({
   getHorasExtraDia,
   horasDiaTotal,
 }) {
+  const celdasVacias = Array.from({ length: lunesPrimeroOffset(diasProp[0]) });
+
   return (
     <div className="tm-medico-calendar-wrap" style={S.medicoCalendarWrap}>
       <div className="tm-medico-week-row">
@@ -2786,6 +2802,10 @@ function MedicoCalendarioCompacto({
       </div>
 
       <div className="tm-medico-calendar-grid" style={S.medicoCalendarGrid}>
+        {celdasVacias.map((_, index) => (
+          <div key={`empty-${index}`} style={S.medicoEmptyDay} />
+        ))}
+
         {diasProp.map((d) => {
           const f = isoDate(d);
           const tipos = turnosDiaOrdenados(getTurnosDia(medicoActivo.id, f));
@@ -3397,7 +3417,7 @@ function CalendarioGlobalMedicos({
   navMes,
   getTurnosDia,
 }) {
-  const offset = diasProp[0]?.getDay() || 0;
+  const offset = lunesPrimeroOffset(diasProp[0]);
   const celdasVacias = Array.from({ length: offset });
   const [detalleDia, setDetalleDia] = useState(null);
   const maxVisibles = 4;
@@ -3437,7 +3457,7 @@ function CalendarioGlobalMedicos({
         <div style={S.globalCalendarViewport}>
           <div style={S.globalCalendarInner}>
             <div style={S.globalWeekGrid}>
-              {["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"].map((dia) => (
+              {["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"].map((dia) => (
                 <div key={dia} style={S.globalWeekLabel}>
                   {dia}
                 </div>
@@ -4630,6 +4650,8 @@ function CalendarioMedicoCoordinador({
   agregarTurnoCoord,
   eliminarTurnoCoord,
 }) {
+  const celdasVacias = Array.from({ length: lunesPrimeroOffset(diasCoord[0]) });
+
   return (
     <div className="tm-medico-calendar-wrap" style={{ ...S.medicoCalendarWrap, marginBottom: 0 }}>
       <div className="tm-medico-week-row">
@@ -4641,6 +4663,10 @@ function CalendarioMedicoCoordinador({
       </div>
 
       <div className="tm-medico-calendar-grid" style={S.medicoCalendarGrid}>
+        {celdasVacias.map((_, index) => (
+          <div key={`empty-${index}`} style={S.medicoEmptyDay} />
+        ))}
+
         {diasCoord.map((d) => {
           const f = isoDate(d);
           const tipos = turnosDiaOrdenados(getTurnosDia(medico.id, f));
@@ -5764,8 +5790,16 @@ const S = {
 
   medicoCalendarGrid: {
     display: "grid",
-    gridTemplateColumns: "repeat(auto-fill, minmax(120px, 1fr))",
+    gridTemplateColumns: "repeat(7, minmax(0, 1fr))",
     gap: 10,
+  },
+
+  medicoEmptyDay: {
+    background: "#111827",
+    border: "1px solid #1f2937",
+    borderRadius: 12,
+    minHeight: 118,
+    opacity: 0.2,
   },
 
   globalMonthBar: {
