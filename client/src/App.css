@@ -401,3 +401,119 @@ textarea {
     min-width: 940px !important;
   }
 }
+/* =========================================================
+   FIX CALENDARIO MÉDICO EN CELULAR
+   Evita que los chips de turnos se salgan de cada día
+   ========================================================= */
+
+@media (max-width: 768px) {
+  html body #root .tm-medico-calendar-wrap {
+    width: 100% !important;
+    max-width: 100% !important;
+    overflow: hidden !important;
+  }
+
+  html body #root .tm-medico-calendar-grid,
+  html body #root .tm-global-calendar-grid,
+  html body #root .tm-medico-week-row {
+    width: 100% !important;
+    max-width: 100% !important;
+    grid-template-columns: repeat(7, minmax(0, 1fr)) !important;
+    gap: 4px !important;
+    overflow: hidden !important;
+  }
+
+  html body #root .tm-medico-day-card {
+    min-width: 0 !important;
+    max-width: 100% !important;
+    overflow: hidden !important;
+    padding: 4px 3px !important;
+  }
+
+  html body #root .tm-medico-day-head {
+    min-width: 0 !important;
+    overflow: hidden !important;
+  }
+
+  html body #root .tm-medico-shift-list {
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    overflow: hidden !important;
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 3px !important;
+  }
+
+  html body #root .tm-medico-shift-chip,
+  html body #root .tm-medico-free-chip {
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    overflow: hidden !important;
+    box-sizing: border-box !important;
+    white-space: nowrap !important;
+    text-overflow: clip !important;
+    padding: 3px 2px !important;
+    border-radius: 6px !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    gap: 1px !important;
+    font-size: 8px !important;
+    line-height: 1 !important;
+  }
+
+  html body #root .tm-medico-shift-chip span:first-child {
+    font-size: 12px !important;
+    line-height: 1 !important;
+  }
+
+  html body #root .tm-medico-shift-chip span:last-child {
+    font-size: 7.5px !important;
+    line-height: 1 !important;
+    max-width: 32px !important;
+    overflow: hidden !important;
+    white-space: nowrap !important;
+    text-overflow: clip !important;
+  }
+
+  html body #root .tm-medico-free-chip {
+    font-size: 7.5px !important;
+  }
+
+  html body #root .tm-medico-day-total {
+    width: 100% !important;
+    max-width: 100% !important;
+    overflow: hidden !important;
+    font-size: 8px !important;
+    line-height: 1 !important;
+    text-align: center !important;
+  }
+}
+
+@media (max-width: 430px) {
+  html body #root .tm-medico-calendar-grid,
+  html body #root .tm-global-calendar-grid,
+  html body #root .tm-medico-week-row {
+    gap: 3px !important;
+  }
+
+  html body #root .tm-medico-day-card {
+    min-height: 92px !important;
+    padding: 4px 2px !important;
+  }
+
+  html body #root .tm-medico-shift-chip span:last-child {
+    display: none !important;
+  }
+
+  html body #root .tm-medico-shift-chip span:first-child {
+    font-size: 16px !important;
+  }
+
+  html body #root .tm-medico-free-chip {
+    font-size: 7px !important;
+    padding: 3px 1px !important;
+  }
+}
