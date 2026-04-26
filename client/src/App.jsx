@@ -15,10 +15,12 @@ const PANTALLAS = {
 };
 
 const VIEWS_COORD = {
+  DASHBOARD: "dashboard",
   HOY: "hoy",
   CALENDARIO: "calendario",
   MEDICOS: "medicos",
   HORARIOS: "horarios",
+  BACKUP: "backup",
 };
 
 const VIEWS_MEDICO = {
@@ -382,6 +384,13 @@ function togglePisoAsignado(pisos, torre, piso) {
 function puedeAgregarTurno(tiposActuales = [], tipoNuevo, fecha = "") {
   const tipos = turnosDiaOrdenados(tiposActuales);
 
+  if (fecha && esFechaFinSemana(fecha) && tipoNuevo !== "FDS") {
+    return {
+      ok: false,
+      msg: "Los sábados y domingos solo se programan como fin de semana",
+    };
+  }
+
   if (tipos.includes(tipoNuevo)) {
     return { ok: false, msg: "Ese turno ya está cargado en ese día" };
   }
@@ -399,6 +408,10 @@ function puedeAgregarTurno(tiposActuales = [], tipoNuevo, fecha = "") {
   }
 
   return { ok: true };
+}
+
+function tiposTurnoPermitidosFecha(fecha) {
+  return esFechaFinSemana(fecha) ? ["FDS"] : Object.keys(TIPOS_TURNO);
 }
 
 function inputStyle(hasErr = false) {
@@ -537,7 +550,7 @@ export default function App() {
   const [tarifaHora, setTarifaHora] = useState(119800);
   const [tarifaHoraInput, setTarifaHoraInput] = useState("119800");
 
-  const [view, setView] = useState(VIEWS_COORD.HOY);
+  const [view, setView] = useState(VIEWS_COORD.DASHBOARD);
   const [year, setYear] = useState(IY);
   const [month, setMonth] = useState(IM);
 
@@ -578,6 +591,7 @@ export default function App() {
 
   const [toast, setToast] = useState(null);
   const toastTimerRef = useRef(null);
+  const backupInputRef = useRef(null);
 
   const diasCoord = useMemo(() => getDias(year, month), [year, month]);
   const diasProp = useMemo(() => getDias(propYear, propMes), [propYear, propMes]);
@@ -1734,6 +1748,72 @@ export default function App() {
     }
   }
 
+  async function descargarBackup() {
+    try {
+      const token = localStorage.getItem("authToken");
+      const res = await fetch(`${API_URL}/backup`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+
+      if (!res.ok) {
+        let data = null;
+        try {
+          data = await res.json();
+        } catch {
+          data = null;
+        }
+        throw new Error(data?.error || "No se pudo generar el backup");
+      }
+
+      const blob = await res.blob();
+      const disposition = res.headers.get("Content-Disposition") || "";
+      const match = disposition.match(/filename="([^"]+)"/);
+      const filename = match?.[1] || `turnosmed-backup-${HOY_ISO}.json`;
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      showToast("Backup descargado correctamente");
+    } catch (error) {
+      console.error(error);
+      showToast(error.message || "No se pudo descargar el backup", "err");
+    }
+  }
+
+  async function restaurarBackupDesdeArchivo(file) {
+    if (!file) return;
+
+    const confirmar = window.confirm(
+      "Restaurar un backup reemplazará los datos actuales por los del archivo seleccionado. ¿Continuar?"
+    );
+
+    if (!confirmar) return;
+
+    try {
+      const texto = await file.text();
+      const backup = JSON.parse(texto);
+
+      await api("/backup/restaurar", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(backup),
+      });
+
+      await cargarTodoInicial();
+      showToast("Backup restaurado correctamente");
+    } catch (error) {
+      console.error(error);
+      showToast(error.message || "No se pudo restaurar el backup", "err");
+    } finally {
+      if (backupInputRef.current) backupInputRef.current.value = "";
+    }
+  }
+
   async function enviarSolicitudCambioTurno() {
     if (!medicoActivo?.id) {
       showToast("Sesión médica no válida", "err");
@@ -1866,10 +1946,19 @@ export default function App() {
 
     if (!endpoints[tipo]) return;
 
+    let comentario = "";
+
+    if (accion === "rechazar") {
+      const respuesta = window.prompt("Comentario para el médico al rechazar la solicitud:", "");
+      if (respuesta === null) return;
+      comentario = respuesta;
+    }
+
     try {
       await api(endpoints[tipo], {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ comentario_coordinador: comentario }),
       });
 
       await Promise.all([
@@ -2390,6 +2479,7 @@ export default function App() {
 
         <nav className="tm-side-nav" style={S.sideNav}>
           {[
+            { key: VIEWS_COORD.DASHBOARD, icon: "📊", label: "Dashboard" },
             { key: VIEWS_COORD.HOY, icon: "📋", label: "Hoy" },
             { key: VIEWS_COORD.CALENDARIO, icon: "📅", label: "Calendario" },
             { key: VIEWS_COORD.MEDICOS, icon: "👨‍⚕️", label: "Médicos y usuarios" },
@@ -2399,6 +2489,7 @@ export default function App() {
               label: "Solicitudes",
               badge: pendientesHorario,
             },
+            { key: VIEWS_COORD.BACKUP, icon: "💾", label: "Backup" },
           ].map((item) => (
             <button
               type="button"
@@ -2471,6 +2562,24 @@ export default function App() {
           </div>
         </div>
 
+        {view === VIEWS_COORD.DASHBOARD && (
+          <VistaDashboardCoordinador
+            medicos={medicos}
+            fecha={HOY_ISO}
+            tarifaHora={tarifaHora}
+            turnos={turnos}
+            solicitudesCambioTurno={solicitudesCambioTurno}
+            solicitudesCesionTurno={solicitudesCesionTurno}
+            solicitudesHorasExtra={solicitudesHorasExtra}
+            solicitudesCuentaCobro={solicitudesCuentaCobro}
+            solicHorario={solicHorario}
+            getTurnosDia={getTurnosDia}
+            getHorasExtraDia={getHorasExtraDia}
+            horasDiaTotal={horasDiaTotal}
+            setView={setView}
+          />
+        )}
+
         {view === VIEWS_COORD.HOY && (
           <VistaHoy
             medicos={medicos}
@@ -2538,6 +2647,14 @@ export default function App() {
             getMedicoNombre={getMedicoNombre}
             cambiarEstadoSolicitud={cambiarEstadoSolicitud}
             descargarCuentaCobroAdmin={descargarCuentaCobroAdmin}
+          />
+        )}
+
+        {view === VIEWS_COORD.BACKUP && (
+          <VistaBackup
+            descargarBackup={descargarBackup}
+            restaurarBackupDesdeArchivo={restaurarBackupDesdeArchivo}
+            backupInputRef={backupInputRef}
           />
         )}
       </main>
@@ -2664,6 +2781,74 @@ function ResponsiveStyles() {
 
           .tm-solicitud-row {
             grid-template-columns: 1fr !important;
+          }
+
+          .tm-coord-layout {
+            display: block !important;
+          }
+
+          .tm-sidebar {
+            position: static !important;
+            width: auto !important;
+            min-height: auto !important;
+            padding: 12px !important;
+          }
+
+          .tm-sidebar-top {
+            margin-bottom: 10px !important;
+          }
+
+          .tm-side-nav {
+            display: grid !important;
+            grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+            gap: 8px !important;
+          }
+
+          .tm-sidebar-bottom {
+            margin-top: 10px !important;
+            gap: 8px !important;
+          }
+
+          .tm-coord-main {
+            padding: 12px !important;
+          }
+
+          .tm-config-card {
+            padding: 12px !important;
+            margin-bottom: 12px !important;
+          }
+
+          .tm-config-actions {
+            width: 100% !important;
+          }
+
+          .tm-config-actions input,
+          .tm-config-actions button {
+            width: 100% !important;
+          }
+
+          .tm-dashboard-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+            gap: 8px !important;
+          }
+
+          .tm-dashboard-metric {
+            padding: 10px !important;
+          }
+
+          .tm-dashboard-columns {
+            grid-template-columns: 1fr !important;
+          }
+
+          .tm-card {
+            padding: 12px !important;
+            border-radius: 10px !important;
+            margin-bottom: 10px !important;
+          }
+
+          .tm-cards-grid {
+            grid-template-columns: 1fr !important;
+            gap: 10px !important;
           }
         }
 
@@ -3965,6 +4150,7 @@ function SolicitudesMedico({
               icon="🔁"
               title="Cambio de turno"
               estado={s.estado}
+              comentario={s.comentario_coordinador}
               text={`${fechaBonita(s.fecha_origen)} ${s.tipo_turno_origen || ""} con ${getMedicoNombre(
                 s.medico_destino_id
               )}`}
@@ -3977,6 +4163,7 @@ function SolicitudesMedico({
               icon="🤝"
               title="Cesión de turno"
               estado={s.estado}
+              comentario={s.comentario_coordinador}
               text={`${fechaBonita(s.fecha)} ${s.tipo_turno || ""} hacia ${getMedicoNombre(
                 s.medico_receptor_id
               )}`}
@@ -3989,6 +4176,7 @@ function SolicitudesMedico({
               icon="📝"
               title="Solicitud de horario"
               estado={s.estado}
+              comentario={s.comentario_coordinador}
               text={`Programación mes ${s.mes || s.mes_programacion || ""}`}
             />
           ))}
@@ -3999,6 +4187,7 @@ function SolicitudesMedico({
               icon="+"
               title="Horas extra"
               estado={s.estado}
+              comentario={s.comentario_coordinador}
               text={`${fechaBonita(s.fecha)} · ${Number(s.horas || 0)}h`}
             />
           ))}
@@ -4009,6 +4198,7 @@ function SolicitudesMedico({
               icon="$"
               title="Cuenta de cobro"
               estado={s.estado}
+              comentario={s.comentario_coordinador}
               text={`Mes ${s.mes}/${s.year} · ${Number(s.total_horas || 0)}h`}
             />
           ))}
@@ -4018,7 +4208,7 @@ function SolicitudesMedico({
   );
 }
 
-function MiniSolicitud({ icon, title, text, estado }) {
+function MiniSolicitud({ icon, title, text, estado, comentario }) {
   return (
     <div style={S.miniSolicitud}>
       <div style={{ fontSize: 20 }}>{icon}</div>
@@ -4026,6 +4216,7 @@ function MiniSolicitud({ icon, title, text, estado }) {
       <div style={{ flex: 1 }}>
         <div style={S.miniSolicitudTitle}>{title}</div>
         <div style={S.miniSolicitudSub}>{text}</div>
+        <ComentarioCoordinador comentario={comentario} />
       </div>
 
       <span
@@ -4306,6 +4497,189 @@ function RegistroMedicos({
         </div>
       </div>
     </div>
+  );
+}
+
+function VistaDashboardCoordinador({
+  medicos,
+  fecha,
+  tarifaHora,
+  turnos,
+  solicitudesCambioTurno,
+  solicitudesCesionTurno,
+  solicitudesHorasExtra,
+  solicitudesCuentaCobro,
+  solicHorario,
+  getTurnosDia,
+  getHorasExtraDia,
+  horasDiaTotal,
+  setView,
+}) {
+  const pendientes = [
+    ...solicitudesCambioTurno,
+    ...solicitudesCesionTurno,
+    ...solicitudesHorasExtra,
+    ...solicitudesCuentaCobro,
+    ...solicHorario,
+  ].filter((s) => s.estado === ESTADOS.PENDIENTE);
+  const medicosTurnoHoy = medicos.filter((med) => getTurnosDia(med.id, fecha).length > 0);
+  const horasHoy = medicos.reduce((acc, med) => acc + horasDiaTotal(med.id, fecha), 0);
+  const extrasPendientes = solicitudesHorasExtra
+    .filter((s) => s.estado === ESTADOS.PENDIENTE)
+    .reduce((acc, s) => acc + Number(s.horas || 0), 0);
+  const cuentasPendientes = solicitudesCuentaCobro.filter((s) => s.estado === ESTADOS.PENDIENTE).length;
+  const turnosMes = Object.values(turnos || {}).reduce(
+    (acc, lista) => acc + (Array.isArray(lista) ? lista.length : 0),
+    0
+  );
+
+  return (
+    <section>
+      <PageHeader
+        title="Dashboard"
+        sub={`Resumen operativo de coordinación para ${fecha}`}
+      />
+
+      <div className="tm-dashboard-grid" style={S.dashboardGrid}>
+        <DashboardMetric title="Médicos activos" value={medicos.length} sub="Registrados" />
+        <DashboardMetric title="De turno hoy" value={medicosTurnoHoy.length} sub={`${horasHoy}h programadas`} />
+        <DashboardMetric title="Solicitudes pendientes" value={pendientes.length} sub="Por revisar" tone="warn" />
+        <DashboardMetric title="Horas extra pendientes" value={`${extrasPendientes}h`} sub="Sin aprobar" tone="warn" />
+        <DashboardMetric title="Cuentas pendientes" value={cuentasPendientes} sub="Para revisión" />
+        <DashboardMetric title="Turnos cargados" value={turnosMes} sub="En la agenda actual" />
+      </div>
+
+      <div className="tm-dashboard-columns" style={S.dashboardColumns}>
+        <div className="tm-card" style={S.card}>
+          <div style={S.cardHeaderBetween}>
+            <div>
+              <div style={S.secTitle}>Hoy</div>
+              <div style={S.metaText}>Médicos programados y valor estimado</div>
+            </div>
+            <button type="button" onClick={() => setView(VIEWS_COORD.HOY)} style={S.smallMutedBtn}>
+              Ver hoy
+            </button>
+          </div>
+
+          <div style={S.dashboardList}>
+            {medicosTurnoHoy.length === 0 && <div style={S.emptyCard}>No hay turnos cargados para hoy.</div>}
+            {medicosTurnoHoy.slice(0, 5).map((med) => {
+              const tipos = turnosDiaOrdenados(getTurnosDia(med.id, fecha));
+              const total = horasDiaTotal(med.id, fecha);
+
+              return (
+                <div key={med.id} style={S.dashboardRow}>
+                  <Av color={med.color} size={32} fontSize={12}>
+                    {med.nombre?.[0]}
+                    {med.apellido?.[0]}
+                  </Av>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={S.medName}>
+                      {med.nombre} {med.apellido}
+                    </div>
+                    <div style={S.metaText}>
+                      {tipos.map((tipo) => TIPOS_TURNO[tipo]?.label).join(" + ")} · {total}h
+                    </div>
+                  </div>
+                  <span style={S.badgeGreen}>{formatCOP(total * Number(tarifaHora || 0))}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="tm-card" style={S.card}>
+          <div style={S.cardHeaderBetween}>
+            <div>
+              <div style={S.secTitle}>Pendientes</div>
+              <div style={S.metaText}>Trabajo que necesita decisión</div>
+            </div>
+            <button type="button" onClick={() => setView(VIEWS_COORD.HORARIOS)} style={S.smallMutedBtn}>
+              Revisar
+            </button>
+          </div>
+
+          <div style={S.dashboardList}>
+            <DashboardPending label="Cambios" count={solicitudesCambioTurno.filter((s) => s.estado === ESTADOS.PENDIENTE).length} />
+            <DashboardPending label="Cesiones" count={solicitudesCesionTurno.filter((s) => s.estado === ESTADOS.PENDIENTE).length} />
+            <DashboardPending label="Horarios" count={solicHorario.filter((s) => s.estado === ESTADOS.PENDIENTE).length} />
+            <DashboardPending label="Horas extra" count={solicitudesHorasExtra.filter((s) => s.estado === ESTADOS.PENDIENTE).length} />
+            <DashboardPending label="Cuentas de cobro" count={cuentasPendientes} />
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function ComentarioCoordinador({ comentario }) {
+  if (!String(comentario || "").trim()) return null;
+
+  return (
+    <div style={S.coordinadorComment}>
+      <b>Comentario coordinación:</b> {comentario}
+    </div>
+  );
+}
+
+function DashboardMetric({ title, value, sub, tone = "normal" }) {
+  return (
+    <div className="tm-dashboard-metric" style={S.dashboardMetric(tone)}>
+      <div style={S.metricTitle}>{title}</div>
+      <div style={S.metricValue}>{value}</div>
+      <div style={S.metaText}>{sub}</div>
+    </div>
+  );
+}
+
+function DashboardPending({ label, count }) {
+  return (
+    <div style={S.dashboardPendingRow}>
+      <span>{label}</span>
+      <span style={{ ...S.chip, background: count ? "#3d2c00" : "#14532d", color: count ? "#facc15" : "#86efac" }}>
+        {count}
+      </span>
+    </div>
+  );
+}
+
+function VistaBackup({ descargarBackup, restaurarBackupDesdeArchivo, backupInputRef }) {
+  return (
+    <section>
+      <PageHeader
+        title="Backup y recuperación"
+        sub="Descarga una copia de seguridad o restaura la información desde un archivo previo."
+      />
+
+      <div className="tm-card" style={S.card}>
+        <div style={S.backupActions}>
+          <button type="button" onClick={descargarBackup} style={S.primaryButton}>
+            Descargar backup
+          </button>
+
+          <button
+            type="button"
+            onClick={() => backupInputRef.current?.click()}
+            style={S.secondaryButton}
+          >
+            Restaurar backup
+          </button>
+
+          <input
+            ref={backupInputRef}
+            type="file"
+            accept="application/json,.json"
+            onChange={(e) => restaurarBackupDesdeArchivo(e.target.files?.[0])}
+            style={{ display: "none" }}
+          />
+        </div>
+
+        <div style={S.warningBox}>
+          La restauración reemplaza los datos actuales por los del archivo. Antes de restaurar,
+          el servidor guarda una copia local de emergencia de la base de datos.
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -4617,7 +4991,7 @@ function VistaCalendario({
                             >
                               <option value="">＋</option>
 
-                              {Object.keys(TIPOS_TURNO)
+                              {tiposTurnoPermitidosFecha(f)
                                 .map((k) => (
                                   <option key={k} value={k}>
                                     {TIPOS_TURNO[k].emoji} {TIPOS_TURNO[k].label}
@@ -4731,7 +5105,7 @@ function CalendarioMedicoCoordinador({
               </div>
 
               <div style={S.coordDayActions}>
-                {Object.keys(TIPOS_TURNO)
+                {tiposTurnoPermitidosFecha(f)
                   .map((tipo) => {
                     const disabled = tipos.includes(tipo);
 
@@ -5289,7 +5663,10 @@ function SolicitudAdminGrupo({
                     {s.fecha_solicitud || s.created_at || "N/A"}
                   </div>
 
-                  <div style={S.reqDetails}>{renderDetalle(s)}</div>
+                  <div style={S.reqDetails}>
+                    {renderDetalle(s)}
+                    <ComentarioCoordinador comentario={s.comentario_coordinador} />
+                  </div>
                 </div>
 
                 <span
@@ -5510,6 +5887,25 @@ const S = {
     padding: "10px 14px",
     fontWeight: 800,
     cursor: "pointer",
+  },
+
+  backupActions: {
+    display: "flex",
+    gap: 10,
+    flexWrap: "wrap",
+    alignItems: "center",
+  },
+
+  warningBox: {
+    marginTop: 14,
+    background: "#3d2c00",
+    border: "1px solid #854d0e",
+    color: "#fde68a",
+    borderRadius: 10,
+    padding: 12,
+    fontSize: 13,
+    lineHeight: 1.5,
+    fontWeight: 800,
   },
 
   approveBtn: {
@@ -6307,6 +6703,69 @@ const S = {
     gap: 14,
   },
 
+  dashboardGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))",
+    gap: 12,
+    marginBottom: 16,
+  },
+
+  dashboardMetric: (tone) => ({
+    background: tone === "warn" ? "#1f1a0b" : "#0b1528",
+    border: `1px solid ${tone === "warn" ? "#854d0e" : "#1e293b"}`,
+    borderRadius: 12,
+    padding: 14,
+  }),
+
+  metricTitle: {
+    color: "#94a3b8",
+    fontSize: 12,
+    fontWeight: 900,
+  },
+
+  metricValue: {
+    color: "#f8fafc",
+    fontSize: 28,
+    fontWeight: 950,
+    marginTop: 6,
+    lineHeight: 1.1,
+  },
+
+  dashboardColumns: {
+    display: "grid",
+    gridTemplateColumns: "minmax(0, 1.25fr) minmax(280px, 0.75fr)",
+    gap: 14,
+  },
+
+  dashboardList: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 10,
+  },
+
+  dashboardRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: 10,
+    background: "#111827",
+    border: "1px solid #1f2937",
+    borderRadius: 10,
+    padding: 10,
+  },
+
+  dashboardPendingRow: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10,
+    background: "#111827",
+    border: "1px solid #1f2937",
+    borderRadius: 10,
+    padding: "10px 12px",
+    color: "#e5e7eb",
+    fontWeight: 900,
+  },
+
   grid3: {
     display: "grid",
     gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))",
@@ -6428,6 +6887,17 @@ const S = {
     color: "#64748b",
     fontSize: 11,
     marginTop: 2,
+  },
+
+  coordinadorComment: {
+    marginTop: 6,
+    color: "#fecaca",
+    background: "#450a0a",
+    border: "1px solid #7f1d1d",
+    borderRadius: 8,
+    padding: "6px 8px",
+    fontSize: 11,
+    lineHeight: 1.4,
   },
 
   miniTitle: {

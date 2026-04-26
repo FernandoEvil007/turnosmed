@@ -3,6 +3,7 @@ const cors = require("cors");
 const sqlite3 = require("sqlite3").verbose();
 const path = require("path");
 const crypto = require("crypto");
+const fs = require("fs");
 const ExcelJS = require("exceljs");
 
 const app = express();
@@ -30,15 +31,19 @@ app.use(
   })
 );
 
-app.use(express.json({ limit: "10mb" }));
+app.use(express.json({ limit: "50mb" }));
 
-const db = new sqlite3.Database(DB_PATH, (err) => {
-  if (err) {
-    console.error("Error abriendo base de datos:", err.message);
-  } else {
-    console.log("Base de datos conectada:", DB_PATH);
-  }
-});
+function abrirBaseDatos() {
+  return new sqlite3.Database(DB_PATH, (err) => {
+    if (err) {
+      console.error("Error abriendo base de datos:", err.message);
+    } else {
+      console.log("Base de datos conectada:", DB_PATH);
+    }
+  });
+}
+
+let db = abrirBaseDatos();
 
 /* ============================================================================
    HELPERS DB
@@ -78,6 +83,15 @@ function all(sql, params = []) {
       } else {
         resolve(rows || []);
       }
+    });
+  });
+}
+
+function closeDb() {
+  return new Promise((resolve, reject) => {
+    db.close((err) => {
+      if (err) reject(err);
+      else resolve();
     });
   });
 }
@@ -144,6 +158,7 @@ async function ensureSolicitudesSchema() {
   await ensureColumn("solicitudes_cambio_turno", "fecha_destino", "TEXT");
   await ensureColumn("solicitudes_cambio_turno", "tipo_turno_destino", "TEXT");
   await ensureColumn("solicitudes_cambio_turno", "mensaje", "TEXT");
+  await ensureColumn("solicitudes_cambio_turno", "comentario_coordinador", "TEXT");
   await ensureColumn("solicitudes_cambio_turno", "estado", "TEXT DEFAULT 'pendiente'");
   await ensureColumn("solicitudes_cambio_turno", "fecha_solicitud", "TEXT DEFAULT CURRENT_TIMESTAMP");
   await ensureColumn("solicitudes_cambio_turno", "updated_at", "TEXT");
@@ -153,6 +168,7 @@ async function ensureSolicitudesSchema() {
   await ensureColumn("solicitudes_cesion_turno", "fecha", "TEXT");
   await ensureColumn("solicitudes_cesion_turno", "tipo_turno", "TEXT");
   await ensureColumn("solicitudes_cesion_turno", "mensaje", "TEXT");
+  await ensureColumn("solicitudes_cesion_turno", "comentario_coordinador", "TEXT");
   await ensureColumn("solicitudes_cesion_turno", "estado", "TEXT DEFAULT 'pendiente'");
   await ensureColumn("solicitudes_cesion_turno", "fecha_solicitud", "TEXT DEFAULT CURRENT_TIMESTAMP");
   await ensureColumn("solicitudes_cesion_turno", "updated_at", "TEXT");
@@ -162,6 +178,7 @@ async function ensureSolicitudesSchema() {
   await ensureColumn("solicitudes_horario", "mes", "INTEGER");
   await ensureColumn("solicitudes_horario", "mes_programacion", "INTEGER");
   await ensureColumn("solicitudes_horario", "mensaje", "TEXT");
+  await ensureColumn("solicitudes_horario", "comentario_coordinador", "TEXT");
   await ensureColumn("solicitudes_horario", "estado", "TEXT DEFAULT 'pendiente'");
   await ensureColumn("solicitudes_horario", "fecha_solicitud", "TEXT DEFAULT CURRENT_TIMESTAMP");
   await ensureColumn("solicitudes_horario", "updated_at", "TEXT");
@@ -183,6 +200,7 @@ async function ensureSolicitudesSchema() {
   await ensureColumn("solicitudes_horas_extra", "fecha", "TEXT");
   await ensureColumn("solicitudes_horas_extra", "horas", "REAL");
   await ensureColumn("solicitudes_horas_extra", "motivo", "TEXT");
+  await ensureColumn("solicitudes_horas_extra", "comentario_coordinador", "TEXT");
   await ensureColumn("solicitudes_horas_extra", "estado", "TEXT DEFAULT 'pendiente'");
   await ensureColumn("solicitudes_horas_extra", "fecha_solicitud", "TEXT DEFAULT CURRENT_TIMESTAMP");
   await ensureColumn("solicitudes_horas_extra", "updated_at", "TEXT");
@@ -204,6 +222,7 @@ async function ensureSolicitudesSchema() {
   await ensureColumn("solicitudes_cuenta_cobro", "year", "INTEGER");
   await ensureColumn("solicitudes_cuenta_cobro", "mes", "INTEGER");
   await ensureColumn("solicitudes_cuenta_cobro", "total_horas", "REAL DEFAULT 0");
+  await ensureColumn("solicitudes_cuenta_cobro", "comentario_coordinador", "TEXT");
   await ensureColumn("solicitudes_cuenta_cobro", "estado", "TEXT DEFAULT 'pendiente'");
   await ensureColumn("solicitudes_cuenta_cobro", "fecha_solicitud", "TEXT DEFAULT CURRENT_TIMESTAMP");
   await ensureColumn("solicitudes_cuenta_cobro", "updated_at", "TEXT");
@@ -582,6 +601,25 @@ function isAdminRol(rol) {
 
 function isTipoTurnoValido(tipo) {
   return TIPOS_TURNO_VALIDOS.includes(cleanText(tipo));
+}
+
+function esFinDeSemanaFecha(fecha) {
+  const d = new Date(`${cleanText(fecha)}T12:00:00`);
+  if (Number.isNaN(d.getTime())) return false;
+
+  const dia = d.getDay();
+  return dia === 0 || dia === 6;
+}
+
+function validarTipoTurnoFecha(fecha, tipoTurno) {
+  if (esFinDeSemanaFecha(fecha) && cleanText(tipoTurno) !== "FDS") {
+    return {
+      ok: false,
+      msg: "Los sábados y domingos solo se pueden programar como fin de semana",
+    };
+  }
+
+  return { ok: true };
 }
 
 function normalizeSolicitudCambio(row) {
@@ -1910,6 +1948,12 @@ app.post("/turnos", requireAdmin, async (req, res) => {
       return fail(res, new Error("Tipo de turno invÃ¡lido"), 400);
     }
 
+    const validacionFecha = validarTipoTurnoFecha(fecha, tipo_turno);
+
+    if (!validacionFecha.ok) {
+      return fail(res, new Error(validacionFecha.msg), 400);
+    }
+
     const medico = await get("SELECT id FROM medicos WHERE id = ? AND activo = 1", [
       medico_id,
     ]);
@@ -2221,6 +2265,7 @@ app.put("/solicitudes-horas-extra/:id/aprobar", requireAdmin, async (req, res) =
       return fail(res, new Error("Esta solicitud ya fue gestionada"), 400);
     }
 
+    await run("PRAGMA foreign_keys = OFF");
     await run("BEGIN TRANSACTION");
 
     try {
@@ -2260,6 +2305,9 @@ app.put("/solicitudes-horas-extra/:id/rechazar", requireAdmin, async (req, res) 
     await ensureSolicitudesSchema();
 
     const id = Number(req.params.id);
+    const comentario = cleanText(
+      req.body.comentario_coordinador || req.body.comentario || req.body.motivo_rechazo
+    );
     const solicitud = await get("SELECT * FROM solicitudes_horas_extra WHERE id = ?", [id]);
 
     if (!solicitud) {
@@ -2274,10 +2322,11 @@ app.put("/solicitudes-horas-extra/:id/rechazar", requireAdmin, async (req, res) 
       `
       UPDATE solicitudes_horas_extra
       SET estado = 'rechazado',
+          comentario_coordinador = ?,
           updated_at = ?
       WHERE id = ?
       `,
-      [fechaActualSql(), id]
+      [comentario, fechaActualSql(), id]
     );
 
     const row = await get("SELECT * FROM solicitudes_horas_extra WHERE id = ?", [id]);
@@ -2786,6 +2835,9 @@ app.put("/solicitudes-cuenta-cobro/:id/rechazar", requireAdmin, async (req, res)
     await ensureSolicitudesSchema();
 
     const id = Number(req.params.id);
+    const comentario = cleanText(
+      req.body.comentario_coordinador || req.body.comentario || req.body.motivo_rechazo
+    );
     const solicitud = await get("SELECT * FROM solicitudes_cuenta_cobro WHERE id = ?", [id]);
 
     if (!solicitud) {
@@ -2800,10 +2852,11 @@ app.put("/solicitudes-cuenta-cobro/:id/rechazar", requireAdmin, async (req, res)
       `
       UPDATE solicitudes_cuenta_cobro
       SET estado = 'rechazado',
+          comentario_coordinador = ?,
           updated_at = ?
       WHERE id = ?
       `,
-      [fechaActualSql(), id]
+      [comentario, fechaActualSql(), id]
     );
 
     const row = await get("SELECT * FROM solicitudes_cuenta_cobro WHERE id = ?", [id]);
@@ -3144,6 +3197,9 @@ app.put("/solicitudes-cambio-turno/:id/rechazar", requireAdmin, async (req, res)
     await ensureSolicitudesSchema();
 
     const id = Number(req.params.id);
+    const comentario = cleanText(
+      req.body.comentario_coordinador || req.body.comentario || req.body.motivo_rechazo
+    );
 
     const solicitud = await get(
       "SELECT * FROM solicitudes_cambio_turno WHERE id = ?",
@@ -3162,10 +3218,11 @@ app.put("/solicitudes-cambio-turno/:id/rechazar", requireAdmin, async (req, res)
       `
       UPDATE solicitudes_cambio_turno
       SET estado = 'rechazado',
+          comentario_coordinador = ?,
           updated_at = ?
       WHERE id = ?
       `,
-      [fechaActualSql(), id]
+      [comentario, fechaActualSql(), id]
     );
 
     const row = await get(
@@ -3408,6 +3465,9 @@ app.put("/solicitudes-cesion-turno/:id/rechazar", requireAdmin, async (req, res)
     await ensureSolicitudesSchema();
 
     const id = Number(req.params.id);
+    const comentario = cleanText(
+      req.body.comentario_coordinador || req.body.comentario || req.body.motivo_rechazo
+    );
 
     const solicitud = await get(
       "SELECT * FROM solicitudes_cesion_turno WHERE id = ?",
@@ -3426,10 +3486,11 @@ app.put("/solicitudes-cesion-turno/:id/rechazar", requireAdmin, async (req, res)
       `
       UPDATE solicitudes_cesion_turno
       SET estado = 'rechazado',
+          comentario_coordinador = ?,
           updated_at = ?
       WHERE id = ?
       `,
-      [fechaActualSql(), id]
+      [comentario, fechaActualSql(), id]
     );
 
     const row = await get(
@@ -3567,6 +3628,9 @@ app.put("/solicitudes-horario/:id/rechazar", requireAdmin, async (req, res) => {
     await ensureSolicitudesSchema();
 
     const id = Number(req.params.id);
+    const comentario = cleanText(
+      req.body.comentario_coordinador || req.body.comentario || req.body.motivo_rechazo
+    );
 
     const solicitud = await get("SELECT * FROM solicitudes_horario WHERE id = ?", [
       id,
@@ -3584,10 +3648,11 @@ app.put("/solicitudes-horario/:id/rechazar", requireAdmin, async (req, res) => {
       `
       UPDATE solicitudes_horario
       SET estado = 'rechazado',
+          comentario_coordinador = ?,
           updated_at = ?
       WHERE id = ?
       `,
-      [fechaActualSql(), id]
+      [comentario, fechaActualSql(), id]
     );
 
     const row = await get("SELECT * FROM solicitudes_horario WHERE id = ?", [
@@ -3595,6 +3660,110 @@ app.put("/solicitudes-horario/:id/rechazar", requireAdmin, async (req, res) => {
     ]);
 
     return ok(res, row);
+  } catch (error) {
+    return fail(res, error);
+  }
+});
+
+/* ============================================================================
+   BACKUP Y RECUPERACION
+============================================================================ */
+async function obtenerTablasBackup() {
+  const rows = await all(`
+    SELECT name
+    FROM sqlite_master
+    WHERE type = 'table'
+      AND name NOT LIKE 'sqlite_%'
+    ORDER BY name ASC
+  `);
+
+  return rows.map((row) => row.name);
+}
+
+async function crearBackupJson() {
+  const tablas = await obtenerTablasBackup();
+  const data = {};
+
+  for (const tabla of tablas) {
+    data[tabla] = await all(`SELECT * FROM ${tabla}`);
+  }
+
+  return {
+    app: "TurnosMed",
+    version: 1,
+    created_at: fechaActualSql(),
+    tables: data,
+  };
+}
+
+app.get("/backup", requireAdmin, async (req, res) => {
+  try {
+    const backup = await crearBackupJson();
+    const nombre = `turnosmed-backup-${backup.created_at.slice(0, 10)}.json`;
+
+    res.setHeader("Content-Type", "application/json; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="${nombre}"`);
+    return res.send(JSON.stringify(backup, null, 2));
+  } catch (error) {
+    return fail(res, error);
+  }
+});
+
+app.post("/backup/restaurar", requireAdmin, async (req, res) => {
+  try {
+    const backup = req.body?.tables ? req.body : req.body?.backup;
+
+    if (!backup?.tables || typeof backup.tables !== "object") {
+      return fail(res, new Error("Archivo de backup invalido"), 400);
+    }
+
+    const snapshotDir = path.join(__dirname, "backups");
+    await fs.promises.mkdir(snapshotDir, { recursive: true });
+
+    if (fs.existsSync(DB_PATH)) {
+      const snapshot = path.join(snapshotDir, `pre-restore-${Date.now()}.sqlite`);
+      await fs.promises.copyFile(DB_PATH, snapshot);
+    }
+
+    await run("BEGIN TRANSACTION");
+
+    try {
+      const tablasActuales = await obtenerTablasBackup();
+      const tablasBackup = Object.keys(backup.tables).filter((tabla) => tablasActuales.includes(tabla));
+
+      for (const tabla of [...tablasBackup].reverse()) {
+        await run(`DELETE FROM ${tabla}`);
+      }
+
+      for (const tabla of tablasBackup) {
+        const filas = Array.isArray(backup.tables[tabla]) ? backup.tables[tabla] : [];
+        const columnasInfo = await all(`PRAGMA table_info(${tabla})`);
+        const disponibles = new Set(columnasInfo.map((col) => col.name));
+
+        for (const fila of filas) {
+          const columnas = Object.keys(fila).filter((col) => disponibles.has(col));
+          if (!columnas.length) continue;
+
+          const placeholders = columnas.map(() => "?").join(", ");
+          const params = columnas.map((col) => fila[col]);
+          await run(
+            `INSERT INTO ${tabla} (${columnas.join(", ")}) VALUES (${placeholders})`,
+            params
+          );
+        }
+      }
+
+      await run("COMMIT");
+    } catch (error) {
+      await run("ROLLBACK");
+      await run("PRAGMA foreign_keys = ON");
+      throw error;
+    }
+
+    await run("PRAGMA foreign_keys = ON");
+    await initDB();
+
+    return ok(res, { ok: true, message: "Backup restaurado correctamente" });
   } catch (error) {
     return fail(res, error);
   }
