@@ -27,6 +27,7 @@ const VIEWS_MEDICO = {
   HORARIO: "horario",
   SOLICITUDES: "solicitudes",
   PACIENTES: "pacientes",
+  NOTIFICACIONES: "notificaciones",
   GLOBAL: "global",
   PERFIL: "perfil",
 };
@@ -133,6 +134,15 @@ const PACIENTE_FORM0 = {
   nombre_paciente: "",
   diagnostico: "",
   pendientes: "",
+  estado_paciente: "activo",
+};
+
+const ESTADOS_PACIENTE = {
+  activo: { label: "Activo", color: "#86efac", bg: "#14532d" },
+  egresado: { label: "Egresado", color: "#bfdbfe", bg: "#1e3a5f" },
+  critico: { label: "Paciente crítico", color: "#fecaca", bg: "#450a0a" },
+  respuesta_rapida: { label: "Respuesta rápida", color: "#fde68a", bg: "#3d2c00" },
+  esperando_uci: { label: "Esperando UCI", color: "#ddd6fe", bg: "#2e1b5e" },
 };
 
 const USER_FORM0 = {
@@ -414,6 +424,10 @@ function tiposTurnoPermitidosFecha(fecha) {
   return esFechaFinSemana(fecha) ? ["FDS"] : Object.keys(TIPOS_TURNO);
 }
 
+function estadoPacienteInfo(estado) {
+  return ESTADOS_PACIENTE[estado] || ESTADOS_PACIENTE.activo;
+}
+
 function inputStyle(hasErr = false) {
   return {
     background: "#1a2744",
@@ -578,6 +592,7 @@ export default function App() {
   const [pacienteForm, setPacienteForm] = useState(PACIENTE_FORM0);
   const [pacientesCargo, setPacientesCargo] = useState([]);
   const [pacientesTodos, setPacientesTodos] = useState([]);
+  const [notificaciones, setNotificaciones] = useState([]);
   const [userForm, setUserForm] = useState(USER_FORM0);
   const [adminForm, setAdminForm] = useState(ADMIN_FORM0);
   const [resetPassForm, setResetPassForm] = useState(RESET_PASS_FORM0);
@@ -667,6 +682,20 @@ export default function App() {
     } catch {
       setPacientesCargo([]);
       setPacientesTodos([]);
+    }
+  }
+
+  async function cargarNotificaciones(medicoId = medicoActivo?.id) {
+    if (!medicoId || !localStorage.getItem("authToken")) {
+      setNotificaciones([]);
+      return;
+    }
+
+    try {
+      const data = await api(`/notificaciones?medico_id=${medicoId}`);
+      setNotificaciones(Array.isArray(data) ? data : []);
+    } catch {
+      setNotificaciones([]);
     }
   }
 
@@ -779,6 +808,7 @@ export default function App() {
   useEffect(() => {
     if (medicoActivo?.id && usuarioSesion) {
       cargarPacientesCargo(medicoActivo.id);
+      cargarNotificaciones(medicoActivo.id);
     }
   }, [medicoActivo?.id, usuarioSesion?.id]);
 
@@ -1477,6 +1507,7 @@ export default function App() {
           nombre_paciente,
           diagnostico,
           pendientes,
+          estado_paciente: pacienteForm.estado_paciente || "activo",
         }),
       });
 
@@ -1486,6 +1517,23 @@ export default function App() {
     } catch (error) {
       console.error(error);
       showToast(error.message || "No se pudo agregar el paciente", "err");
+    }
+  }
+
+  async function actualizarEstadoPacienteCargo(id, estado_paciente) {
+    try {
+      const row = await api(`/pacientes-cargo/${id}/estado`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ estado_paciente }),
+      });
+
+      setPacientesCargo((prev) => prev.map((p) => (Number(p.id) === Number(id) ? row : p)));
+      setPacientesTodos((prev) => prev.map((p) => (Number(p.id) === Number(id) ? { ...p, ...row } : p)));
+      showToast("Estado del paciente actualizado");
+    } catch (error) {
+      console.error(error);
+      showToast(error.message || "No se pudo actualizar el estado", "err");
     }
   }
 
@@ -1814,6 +1862,109 @@ export default function App() {
     }
   }
 
+  async function descargarCalendarioExcel({ y, m, medicoId = null }) {
+    try {
+      const token = localStorage.getItem("authToken");
+      const params = new URLSearchParams({
+        year: String(y),
+        mes: String(m + 1),
+      });
+
+      if (medicoId) params.set("medico_id", String(medicoId));
+
+      const res = await fetch(`${API_URL}/calendario/export/excel?${params.toString()}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+
+      if (!res.ok) {
+        let data = null;
+        try {
+          data = await res.json();
+        } catch {
+          data = null;
+        }
+        throw new Error(data?.error || "No se pudo exportar el calendario");
+      }
+
+      const blob = await res.blob();
+      const disposition = res.headers.get("Content-Disposition") || "";
+      const match = disposition.match(/filename="([^"]+)"/);
+      const filename = match?.[1] || `calendario-turnos-${y}-${String(m + 1).padStart(2, "0")}.xlsx`;
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      showToast("Calendario exportado a Excel");
+    } catch (error) {
+      console.error(error);
+      showToast(error.message || "No se pudo exportar el Excel", "err");
+    }
+  }
+
+  function exportarCalendarioPdf({ y, m, dias, medicoId = null, titulo = "Calendario de turnos" }) {
+    const medicosExport = medicoId
+      ? medicos.filter((med) => Number(med.id) === Number(medicoId))
+      : medicos;
+    const filas = medicosExport
+      .map((med) => {
+        const celdas = dias
+          .map((d) => {
+            const fecha = isoDate(d);
+            const tipos = turnosDiaOrdenados(getTurnosDia(med.id, fecha));
+            return `<td>${tipos.length ? tipos.map((tipo) => TIPOS_TURNO[tipo]?.label || tipo).join("<br>") : "Libre"}</td>`;
+          })
+          .join("");
+
+        return `<tr><th>${med.nombre || ""} ${med.apellido || ""}<br><small>${med.especialidad || ""}</small></th>${celdas}</tr>`;
+      })
+      .join("");
+    const encabezados = dias
+      .map((d) => `<th>${diaLabel(d)}<br>${isoDate(d).slice(8)}</th>`)
+      .join("");
+    const html = `
+      <!doctype html>
+      <html>
+        <head>
+          <title>${titulo}</title>
+          <style>
+            body { font-family: Arial, sans-serif; color: #111827; margin: 24px; }
+            h1 { margin: 0 0 4px; font-size: 20px; }
+            p { margin: 0 0 16px; color: #475569; }
+            table { border-collapse: collapse; width: 100%; font-size: 10px; }
+            th, td { border: 1px solid #cbd5e1; padding: 5px; vertical-align: top; text-align: center; }
+            th { background: #dbeafe; color: #0f172a; font-weight: 700; }
+            tr th:first-child { text-align: left; min-width: 150px; background: #eff6ff; }
+            small { color: #64748b; font-weight: 400; }
+            @media print { body { margin: 10mm; } }
+          </style>
+        </head>
+        <body>
+          <h1>${titulo}</h1>
+          <p>${capFirst(mesLabel(y, m))}</p>
+          <table>
+            <thead><tr><th>Médico</th>${encabezados}</tr></thead>
+            <tbody>${filas}</tbody>
+          </table>
+          <script>window.onload = () => window.print();</script>
+        </body>
+      </html>
+    `;
+    const win = window.open("", "_blank");
+
+    if (!win) {
+      showToast("El navegador bloqueó la ventana de impresión", "err");
+      return;
+    }
+
+    win.document.write(html);
+    win.document.close();
+  }
+
   async function enviarSolicitudCambioTurno() {
     if (!medicoActivo?.id) {
       showToast("Sesión médica no válida", "err");
@@ -1969,6 +2120,7 @@ export default function App() {
         cargarSolicitudesCuentaCobro(),
         cargarTurnos(),
         cargarHorasAdicionales(),
+        medicoActivo?.id ? cargarNotificaciones(medicoActivo.id) : Promise.resolve(),
       ]);
 
       showToast(
@@ -1979,6 +2131,33 @@ export default function App() {
     } catch (error) {
       console.error(error);
       showToast(error.message || "No se pudo actualizar la solicitud", "err");
+    }
+  }
+
+  async function marcarNotificacionLeida(id) {
+    try {
+      await api(`/notificaciones/${id}/leida`, { method: "PUT" });
+      await cargarNotificaciones(medicoActivo?.id);
+    } catch (error) {
+      console.error(error);
+      showToast(error.message || "No se pudo actualizar la notificación", "err");
+    }
+  }
+
+  async function marcarTodasNotificacionesLeidas() {
+    if (!medicoActivo?.id) return;
+
+    try {
+      await api("/notificaciones/marcar-todas/leidas", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ medico_id: medicoActivo.id }),
+      });
+      await cargarNotificaciones(medicoActivo.id);
+      showToast("Notificaciones marcadas como leídas");
+    } catch (error) {
+      console.error(error);
+      showToast(error.message || "No se pudieron actualizar las notificaciones", "err");
     }
   }
 
@@ -2144,6 +2323,7 @@ export default function App() {
     const hMes = horasMes(medicoActivo.id, propYear, propMes);
     const sueldoMes = salarioMes(medicoActivo.id, propYear, propMes);
     const requiereActualizarRegistro = Number(medicoActivo?.datos_registro_actualizados || 0) !== 1;
+    const notificacionesNoLeidas = notificaciones.filter((n) => Number(n.leida || 0) !== 1).length;
 
     return (
       <div style={S.page}>
@@ -2225,6 +2405,14 @@ export default function App() {
 
             <button
               type="button"
+              onClick={() => setMedicoView(VIEWS_MEDICO.NOTIFICACIONES)}
+              style={S.medicoTab(medicoView === VIEWS_MEDICO.NOTIFICACIONES)}
+            >
+              Notificaciones{notificacionesNoLeidas > 0 ? ` (${notificacionesNoLeidas})` : ""}
+            </button>
+
+            <button
+              type="button"
               onClick={() => setMedicoView(VIEWS_MEDICO.GLOBAL)}
               style={S.medicoTab(medicoView === VIEWS_MEDICO.GLOBAL)}
             >
@@ -2273,6 +2461,28 @@ export default function App() {
 
                 <span style={S.badgeBlue}>{hMes}h totales</span>
                 <span style={S.badgeGreen}>{formatCOP(sueldoMes)}</span>
+                <button
+                  type="button"
+                  onClick={() => descargarCalendarioExcel({ y: propYear, m: propMes, medicoId: medicoActivo.id })}
+                  style={S.secondaryButton}
+                >
+                  Excel
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    exportarCalendarioPdf({
+                      y: propYear,
+                      m: propMes,
+                      dias: diasProp,
+                      medicoId: medicoActivo.id,
+                      titulo: `Calendario de ${medicoActivo.nombre} ${medicoActivo.apellido}`,
+                    })
+                  }
+                  style={S.secondaryButton}
+                >
+                  PDF
+                </button>
               </div>
 
               <div style={S.legend}>
@@ -2342,6 +2552,15 @@ export default function App() {
               pacientesTodos={pacientesTodos}
               crearPacienteCargo={crearPacienteCargo}
               eliminarPacienteCargo={eliminarPacienteCargo}
+              actualizarEstadoPacienteCargo={actualizarEstadoPacienteCargo}
+            />
+          )}
+
+          {!requiereActualizarRegistro && medicoView === VIEWS_MEDICO.NOTIFICACIONES && (
+            <NotificacionesMedico
+              notificaciones={notificaciones}
+              marcarNotificacionLeida={marcarNotificacionLeida}
+              marcarTodasNotificacionesLeidas={marcarTodasNotificacionesLeidas}
             />
           )}
 
@@ -2605,6 +2824,8 @@ export default function App() {
             horasDiaTotal={horasDiaTotal}
             agregarTurnoCoord={agregarTurnoCoord}
             eliminarTurnoCoord={eliminarTurnoCoord}
+            descargarCalendarioExcel={descargarCalendarioExcel}
+            exportarCalendarioPdf={exportarCalendarioPdf}
           />
         )}
 
@@ -3128,6 +3349,7 @@ function PacientesCargoMedico({
   pacientesTodos,
   crearPacienteCargo,
   eliminarPacienteCargo,
+  actualizarEstadoPacienteCargo,
 }) {
   const pisosAsignados = pisosAsignadosMedico(medicoActivo);
   const piso = pisoMedicoLabel(medicoActivo);
@@ -3215,6 +3437,22 @@ function PacientesCargoMedico({
               placeholder="Labs, imagenes, interconsultas..."
             />
           </Campo>
+
+          <Campo label="Estado">
+            <select
+              value={pacienteForm.estado_paciente}
+              onChange={(e) =>
+                setPacienteForm((p) => ({ ...p, estado_paciente: e.target.value }))
+              }
+              style={inputStyle(false)}
+            >
+              {Object.entries(ESTADOS_PACIENTE).map(([key, value]) => (
+                <option key={key} value={key}>
+                  {value.label}
+                </option>
+              ))}
+            </select>
+          </Campo>
         </div>
 
         <button
@@ -3245,6 +3483,10 @@ function PacientesCargoMedico({
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 12 }}>
           {pacientesCargo.map((paciente) => (
             <div key={paciente.id} style={S.patientCard}>
+              <span style={S.estadoPacienteChip(paciente.estado_paciente)}>
+                {estadoPacienteInfo(paciente.estado_paciente).label}
+              </span>
+
               <div style={S.rowBetween}>
                 <div>
                   <div style={S.patientBed}>Cama {paciente.cama}</div>
@@ -3271,6 +3513,19 @@ function PacientesCargoMedico({
                 <span>
                   <b>Pendientes:</b> {paciente.pendientes || "Sin pendientes"}
                 </span>
+              </div>
+
+              <div style={S.patientQuickStates}>
+                {Object.entries(ESTADOS_PACIENTE).map(([key, value]) => (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => actualizarEstadoPacienteCargo(paciente.id, key)}
+                    style={S.patientStateBtn(key === (paciente.estado_paciente || "activo"), value)}
+                  >
+                    {value.label}
+                  </button>
+                ))}
               </div>
             </div>
           ))}
@@ -3310,6 +3565,9 @@ function PacientesCargoMedico({
 
                   return (
                     <div key={`todos-${paciente.id}`} style={S.patientCard}>
+                      <span style={S.estadoPacienteChip(paciente.estado_paciente)}>
+                        {estadoPacienteInfo(paciente.estado_paciente).label}
+                      </span>
                       <div style={S.patientBed}>Cama {paciente.cama}</div>
                       <div style={S.patientName}>{paciente.nombre_paciente}</div>
                       <div style={S.metaText}>
@@ -3331,6 +3589,61 @@ function PacientesCargoMedico({
               </div>
             </div>
           ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function NotificacionesMedico({
+  notificaciones,
+  marcarNotificacionLeida,
+  marcarTodasNotificacionesLeidas,
+}) {
+  const noLeidas = notificaciones.filter((n) => Number(n.leida || 0) !== 1).length;
+
+  return (
+    <section style={S.solicitudesMedicoSection}>
+      <div style={S.sectionHeader}>
+        <div>
+          <h2 style={S.sectionTitle}>Notificaciones</h2>
+          <p style={S.sectionSub}>Avisos internos de coordinación y cambios de estado.</p>
+        </div>
+
+        <button
+          type="button"
+          onClick={marcarTodasNotificacionesLeidas}
+          disabled={!noLeidas}
+          style={{ ...S.secondaryButton, opacity: noLeidas ? 1 : 0.55 }}
+        >
+          Marcar leídas
+        </button>
+      </div>
+
+      <div className="tm-card" style={S.card}>
+        {notificaciones.length === 0 && (
+          <div style={S.emptyCard}>No tienes notificaciones por ahora.</div>
+        )}
+
+        <div style={S.notificationList}>
+          {notificaciones.map((n) => {
+            const leida = Number(n.leida || 0) === 1;
+
+            return (
+              <button
+                key={n.id}
+                type="button"
+                onClick={() => marcarNotificacionLeida(n.id)}
+                style={S.notificationItem(leida)}
+              >
+                <div style={S.notificationTitle}>{n.titulo}</div>
+                <div style={S.notificationText}>{n.mensaje || "Sin detalle adicional"}</div>
+                <div style={S.notificationMeta}>
+                  {n.created_at || "Sin fecha"} · {leida ? "Leída" : "Nueva"}
+                </div>
+              </button>
+            );
+          })}
         </div>
       </div>
     </section>
@@ -4807,6 +5120,62 @@ function VistaCalendario({
           </button>
         </div>
 
+        <div style={S.exportActions}>
+          <button
+            type="button"
+            onClick={() => descargarCalendarioExcel({ y: year, m: month })}
+            style={S.secondaryButton}
+          >
+            Exportar Excel general
+          </button>
+          <button
+            type="button"
+            onClick={() =>
+              exportarCalendarioPdf({
+                y: year,
+                m: month,
+                dias: diasCoord,
+                titulo: "Calendario general de turnos",
+              })
+            }
+            style={S.secondaryButton}
+          >
+            Exportar PDF general
+          </button>
+          {medicoSeleccionado && (
+            <>
+              <button
+                type="button"
+                onClick={() =>
+                  descargarCalendarioExcel({
+                    y: year,
+                    m: month,
+                    medicoId: medicoSeleccionado.id,
+                  })
+                }
+                style={S.secondaryButton}
+              >
+                Excel médico
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  exportarCalendarioPdf({
+                    y: year,
+                    m: month,
+                    dias: diasCoord,
+                    medicoId: medicoSeleccionado.id,
+                    titulo: `Calendario de ${medicoSeleccionado.nombre} ${medicoSeleccionado.apellido}`,
+                  })
+                }
+                style={S.secondaryButton}
+              >
+                PDF médico
+              </button>
+            </>
+          )}
+        </div>
+
         <div style={S.calendarLegend}>
           <span style={{ ...S.legendPill, background: "#1e3a5f", color: "#60a5fa" }}>
             ☀️ Día · 8h
@@ -5023,6 +5392,8 @@ function CalendarioMedicoCoordinador({
   horasDiaTotal,
   agregarTurnoCoord,
   eliminarTurnoCoord,
+  descargarCalendarioExcel,
+  exportarCalendarioPdf,
 }) {
   const celdasVacias = Array.from({ length: lunesPrimeroOffset(diasCoord[0]) });
 
@@ -5894,6 +6265,14 @@ const S = {
     gap: 10,
     flexWrap: "wrap",
     alignItems: "center",
+  },
+
+  exportActions: {
+    display: "flex",
+    gap: 10,
+    flexWrap: "wrap",
+    alignItems: "center",
+    marginBottom: 14,
   },
 
   warningBox: {
@@ -6952,6 +7331,42 @@ const S = {
     fontWeight: 900,
   },
 
+  estadoPacienteChip: (estado) => {
+    const info = estadoPacienteInfo(estado);
+    return {
+      display: "inline-flex",
+      alignItems: "center",
+      width: "fit-content",
+      marginTop: 8,
+      marginBottom: 8,
+      borderRadius: 999,
+      padding: "5px 9px",
+      background: info.bg,
+      color: info.color,
+      border: "1px solid rgba(255,255,255,0.08)",
+      fontSize: 11,
+      fontWeight: 900,
+    };
+  },
+
+  patientQuickStates: {
+    display: "flex",
+    gap: 6,
+    flexWrap: "wrap",
+    marginTop: 12,
+  },
+
+  patientStateBtn: (active, info) => ({
+    borderRadius: 999,
+    padding: "6px 9px",
+    border: active ? `1px solid ${info.color}` : "1px solid #1f2937",
+    background: active ? info.bg : "#0f172a",
+    color: active ? info.color : "#94a3b8",
+    cursor: "pointer",
+    fontSize: 11,
+    fontWeight: 900,
+  }),
+
   patientFloorGroup: {
     background: "#081120",
     border: "1px solid #1e293b",
@@ -6964,6 +7379,42 @@ const S = {
     fontSize: 13,
     fontWeight: 900,
     marginBottom: 10,
+  },
+
+  notificationList: {
+    display: "grid",
+    gap: 10,
+  },
+
+  notificationItem: (leida) => ({
+    width: "100%",
+    textAlign: "left",
+    background: leida ? "#0f172a" : "#112044",
+    border: leida ? "1px solid #1f2937" : "1px solid #2563eb",
+    borderRadius: 12,
+    padding: 14,
+    cursor: leida ? "default" : "pointer",
+    opacity: leida ? 0.78 : 1,
+  }),
+
+  notificationTitle: {
+    color: "#f8fafc",
+    fontSize: 15,
+    fontWeight: 900,
+    marginBottom: 4,
+  },
+
+  notificationText: {
+    color: "#cbd5e1",
+    fontSize: 13,
+    lineHeight: 1.45,
+    marginBottom: 8,
+  },
+
+  notificationMeta: {
+    color: "#64748b",
+    fontSize: 11,
+    fontWeight: 800,
   },
 
   infoRows: {

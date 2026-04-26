@@ -22,6 +22,7 @@ const TORRES_PISOS = {
 };
 
 const TIPOS_TURNO_VALIDOS = ["DIA", "CENIZO", "FDS"];
+const ESTADOS_PACIENTE_VALIDOS = ["activo", "egresado", "critico", "respuesta_rapida", "esperando_uci"];
 
 app.use(
   cors({
@@ -239,6 +240,7 @@ async function ensurePacientesCargoSchema() {
       nombre_paciente TEXT NOT NULL,
       diagnostico TEXT,
       pendientes TEXT,
+      estado_paciente TEXT DEFAULT 'activo',
       created_at TEXT DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT
     )
@@ -251,8 +253,30 @@ async function ensurePacientesCargoSchema() {
   await ensureColumn("pacientes_cargo", "nombre_paciente", "TEXT");
   await ensureColumn("pacientes_cargo", "diagnostico", "TEXT");
   await ensureColumn("pacientes_cargo", "pendientes", "TEXT");
+  await ensureColumn("pacientes_cargo", "estado_paciente", "TEXT DEFAULT 'activo'");
   await ensureColumn("pacientes_cargo", "created_at", "TEXT DEFAULT CURRENT_TIMESTAMP");
   await ensureColumn("pacientes_cargo", "updated_at", "TEXT");
+}
+
+async function ensureNotificacionesSchema() {
+  await run(`
+    CREATE TABLE IF NOT EXISTS notificaciones (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      medico_id INTEGER,
+      titulo TEXT NOT NULL,
+      mensaje TEXT,
+      tipo TEXT,
+      leida INTEGER DEFAULT 0,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  await ensureColumn("notificaciones", "medico_id", "INTEGER");
+  await ensureColumn("notificaciones", "titulo", "TEXT");
+  await ensureColumn("notificaciones", "mensaje", "TEXT");
+  await ensureColumn("notificaciones", "tipo", "TEXT");
+  await ensureColumn("notificaciones", "leida", "INTEGER DEFAULT 0");
+  await ensureColumn("notificaciones", "created_at", "TEXT DEFAULT CURRENT_TIMESTAMP");
 }
 
 async function ensureMedicoPisosSchema() {
@@ -622,6 +646,37 @@ function validarTipoTurnoFecha(fecha, tipoTurno) {
   return { ok: true };
 }
 
+function normalizeEstadoPaciente(estado) {
+  const e = cleanText(estado).toLowerCase();
+  return ESTADOS_PACIENTE_VALIDOS.includes(e) ? e : "activo";
+}
+
+async function crearNotificacion({ medico_id, titulo, mensaje, tipo = "general" }) {
+  const medicoId = Number(medico_id);
+  const title = cleanText(titulo);
+
+  if (!medicoId || !title) return null;
+
+  await ensureNotificacionesSchema();
+
+  const result = await run(
+    `
+    INSERT INTO notificaciones (
+      medico_id,
+      titulo,
+      mensaje,
+      tipo,
+      leida,
+      created_at
+    )
+    VALUES (?, ?, ?, ?, 0, ?)
+    `,
+    [medicoId, title, cleanText(mensaje), cleanText(tipo) || "general", fechaActualSql()]
+  );
+
+  return get("SELECT * FROM notificaciones WHERE id = ?", [result.id]);
+}
+
 function normalizeSolicitudCambio(row) {
   if (!row) return null;
 
@@ -916,6 +971,7 @@ async function initDB() {
       nombre_paciente TEXT NOT NULL,
       diagnostico TEXT,
       pendientes TEXT,
+      estado_paciente TEXT DEFAULT 'activo',
       created_at TEXT DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT
     )
@@ -1005,6 +1061,7 @@ async function initDB() {
   await ensureSolicitudesSchema();
   await ensurePacientesCargoSchema();
   await ensureMedicoPisosSchema();
+  await ensureNotificacionesSchema();
 
   await ensureIndex(
     "idx_medicos_documento",
@@ -1064,6 +1121,11 @@ async function initDB() {
   await ensureIndex(
     "idx_pacientes_cargo_medico",
     "ON pacientes_cargo(medico_id)"
+  );
+
+  await ensureIndex(
+    "idx_notificaciones_medico",
+    "ON notificaciones(medico_id, leida)"
   );
 
   const configTarifa = await get(
@@ -1934,6 +1996,86 @@ app.get("/especialistas-turno-hoy", async (req, res) => {
   }
 });
 
+app.get("/calendario/export/excel", requireAuth, async (req, res) => {
+  try {
+    const year = Number(req.query.year);
+    const mes = Number(req.query.mes);
+    const medicoId = req.query.medico_id ? Number(req.query.medico_id) : null;
+
+    if (!year || !mes || mes < 1 || mes > 12) {
+      return fail(res, new Error("Año y mes son obligatorios"), 400);
+    }
+
+    if (medicoId && !canManageMedico(req, medicoId)) {
+      return fail(res, new Error("No puedes exportar calendario de otro médico"), 403);
+    }
+
+    const inicio = `${year}-${String(mes).padStart(2, "0")}-01`;
+    const fin = new Date(year, mes, 0).toISOString().slice(0, 10);
+    const params = medicoId ? [inicio, fin, medicoId] : [inicio, fin];
+    const filtroMedico = medicoId ? "AND t.medico_id = ?" : "";
+    const rows = await all(
+      `
+      SELECT
+        t.fecha,
+        t.tipo_turno,
+        m.nombre,
+        m.apellido,
+        m.documento,
+        m.especialidad,
+        m.torre_asignada,
+        m.piso_asignado
+      FROM turnos t
+      INNER JOIN medicos m ON m.id = t.medico_id
+      WHERE t.fecha BETWEEN ? AND ?
+        ${filtroMedico}
+      ORDER BY t.fecha ASC, m.apellido ASC, m.nombre ASC, t.tipo_turno ASC
+      `,
+      params
+    );
+
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet("Calendario");
+
+    sheet.columns = [
+      { header: "Fecha", key: "fecha", width: 14 },
+      { header: "Medico", key: "medico", width: 34 },
+      { header: "Documento", key: "documento", width: 16 },
+      { header: "Especialidad", key: "especialidad", width: 24 },
+      { header: "Turno", key: "turno", width: 16 },
+      { header: "Torre", key: "torre", width: 14 },
+      { header: "Piso", key: "piso", width: 12 },
+    ];
+
+    sheet.getRow(1).font = { bold: true, color: { argb: "FFFFFFFF" } };
+    sheet.getRow(1).fill = {
+      type: "pattern",
+      pattern: "solid",
+      fgColor: { argb: "FF1D4ED8" },
+    };
+
+    rows.forEach((row) => {
+      sheet.addRow({
+        fecha: row.fecha,
+        medico: `${row.nombre || ""} ${row.apellido || ""}`.trim(),
+        documento: row.documento,
+        especialidad: row.especialidad,
+        turno: row.tipo_turno,
+        torre: row.torre_asignada,
+        piso: row.piso_asignado,
+      });
+    });
+
+    const filename = `calendario-turnos-${year}-${String(mes).padStart(2, "0")}.xlsx`;
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    await workbook.xlsx.write(res);
+    return res.end();
+  } catch (error) {
+    return fail(res, error);
+  }
+});
+
 app.post("/turnos", requireAdmin, async (req, res) => {
   try {
     const medico_id = Number(req.body.medico_id);
@@ -2294,6 +2436,13 @@ app.put("/solicitudes-horas-extra/:id/aprobar", requireAdmin, async (req, res) =
 
     const row = await get("SELECT * FROM solicitudes_horas_extra WHERE id = ?", [id]);
 
+    await crearNotificacion({
+      medico_id: solicitud.medico_id,
+      titulo: "Horas extra aprobadas",
+      mensaje: `Coordinación aprobó ${Number(solicitud.horas || 0)}h extra del ${solicitud.fecha}.`,
+      tipo: "horas_extra",
+    });
+
     return ok(res, row);
   } catch (error) {
     return fail(res, error);
@@ -2331,6 +2480,13 @@ app.put("/solicitudes-horas-extra/:id/rechazar", requireAdmin, async (req, res) 
 
     const row = await get("SELECT * FROM solicitudes_horas_extra WHERE id = ?", [id]);
 
+    await crearNotificacion({
+      medico_id: solicitud.medico_id,
+      titulo: "Horas extra rechazadas",
+      mensaje: comentario || `Coordinación rechazó las horas extra del ${solicitud.fecha}.`,
+      tipo: "horas_extra",
+    });
+
     return ok(res, row);
   } catch (error) {
     return fail(res, error);
@@ -2363,6 +2519,85 @@ app.put("/usuarios/me/password", requireAuth, async (req, res) => {
     await updateUserPassword(usuario.id, nuevaPassword);
 
     return ok(res, { ok: true, message: "Contraseña actualizada correctamente" });
+  } catch (error) {
+    return fail(res, error);
+  }
+});
+
+/* ============================================================================
+   NOTIFICACIONES
+============================================================================ */
+app.get("/notificaciones", requireAuth, async (req, res) => {
+  try {
+    await ensureNotificacionesSchema();
+
+    const medicoId = Number(req.query.medico_id || req.auth?.medico_id);
+
+    if (!medicoId) {
+      return ok(res, []);
+    }
+
+    if (!canManageMedico(req, medicoId)) {
+      return fail(res, new Error("No puedes ver notificaciones de otro médico"), 403);
+    }
+
+    const rows = await all(
+      `
+      SELECT *
+      FROM notificaciones
+      WHERE medico_id = ?
+      ORDER BY datetime(created_at) DESC, id DESC
+      LIMIT 80
+      `,
+      [medicoId]
+    );
+
+    return ok(res, rows);
+  } catch (error) {
+    return fail(res, error);
+  }
+});
+
+app.put("/notificaciones/:id/leida", requireAuth, async (req, res) => {
+  try {
+    await ensureNotificacionesSchema();
+
+    const id = Number(req.params.id);
+    const notificacion = await get("SELECT * FROM notificaciones WHERE id = ?", [id]);
+
+    if (!notificacion) {
+      return fail(res, new Error("Notificación no encontrada"), 404);
+    }
+
+    if (!canManageMedico(req, notificacion.medico_id)) {
+      return fail(res, new Error("No puedes modificar esta notificación"), 403);
+    }
+
+    await run("UPDATE notificaciones SET leida = 1 WHERE id = ?", [id]);
+    const row = await get("SELECT * FROM notificaciones WHERE id = ?", [id]);
+
+    return ok(res, row);
+  } catch (error) {
+    return fail(res, error);
+  }
+});
+
+app.put("/notificaciones/marcar-todas/leidas", requireAuth, async (req, res) => {
+  try {
+    await ensureNotificacionesSchema();
+
+    const medicoId = Number(req.body.medico_id || req.auth?.medico_id);
+
+    if (!medicoId) {
+      return fail(res, new Error("Médico requerido"), 400);
+    }
+
+    if (!canManageMedico(req, medicoId)) {
+      return fail(res, new Error("No puedes modificar notificaciones de otro médico"), 403);
+    }
+
+    await run("UPDATE notificaciones SET leida = 1 WHERE medico_id = ?", [medicoId]);
+    return ok(res, { ok: true });
   } catch (error) {
     return fail(res, error);
   }
@@ -2430,6 +2665,7 @@ app.post("/pacientes-cargo", requireAuth, async (req, res) => {
     const nombre_paciente = cleanText(req.body.nombre_paciente || req.body.nombre);
     const diagnostico = cleanText(req.body.diagnostico);
     const pendientes = cleanText(req.body.pendientes);
+    const estado_paciente = normalizeEstadoPaciente(req.body.estado_paciente);
     const torreSolicitada = cleanText(req.body.torre);
     const pisoSolicitado = cleanText(req.body.piso).toLowerCase();
 
@@ -2477,9 +2713,10 @@ app.post("/pacientes-cargo", requireAuth, async (req, res) => {
         nombre_paciente,
         diagnostico,
         pendientes,
+        estado_paciente,
         updated_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       [
         medico_id,
@@ -2489,12 +2726,46 @@ app.post("/pacientes-cargo", requireAuth, async (req, res) => {
         nombre_paciente,
         diagnostico,
         pendientes,
+        estado_paciente,
         fechaActualSql(),
       ]
     );
 
     const row = await get("SELECT * FROM pacientes_cargo WHERE id = ?", [result.id]);
 
+    return ok(res, row);
+  } catch (error) {
+    return fail(res, error);
+  }
+});
+
+app.put("/pacientes-cargo/:id/estado", requireAuth, async (req, res) => {
+  try {
+    await ensurePacientesCargoSchema();
+
+    const id = Number(req.params.id);
+    const estado_paciente = normalizeEstadoPaciente(req.body.estado_paciente || req.body.estado);
+    const paciente = await get("SELECT * FROM pacientes_cargo WHERE id = ?", [id]);
+
+    if (!paciente) {
+      return fail(res, new Error("Paciente no encontrado"), 404);
+    }
+
+    if (!canManageMedico(req, paciente.medico_id)) {
+      return fail(res, new Error("No puedes modificar pacientes de otro médico"), 403);
+    }
+
+    await run(
+      `
+      UPDATE pacientes_cargo
+      SET estado_paciente = ?,
+          updated_at = ?
+      WHERE id = ?
+      `,
+      [estado_paciente, fechaActualSql(), id]
+    );
+
+    const row = await get("SELECT * FROM pacientes_cargo WHERE id = ?", [id]);
     return ok(res, row);
   } catch (error) {
     return fail(res, error);
@@ -2824,6 +3095,13 @@ app.put("/solicitudes-cuenta-cobro/:id/aprobar", requireAdmin, async (req, res) 
 
     const row = await get("SELECT * FROM solicitudes_cuenta_cobro WHERE id = ?", [id]);
 
+    await crearNotificacion({
+      medico_id: solicitud.medico_id,
+      titulo: "Cuenta de cobro aprobada",
+      mensaje: `Coordinación aprobó tu cuenta de cobro ${solicitud.mes}/${solicitud.year}.`,
+      tipo: "cuenta_cobro",
+    });
+
     return ok(res, row);
   } catch (error) {
     return fail(res, error);
@@ -2860,6 +3138,13 @@ app.put("/solicitudes-cuenta-cobro/:id/rechazar", requireAdmin, async (req, res)
     );
 
     const row = await get("SELECT * FROM solicitudes_cuenta_cobro WHERE id = ?", [id]);
+
+    await crearNotificacion({
+      medico_id: solicitud.medico_id,
+      titulo: "Cuenta de cobro rechazada",
+      mensaje: comentario || `Coordinación rechazó tu cuenta de cobro ${solicitud.mes}/${solicitud.year}.`,
+      tipo: "cuenta_cobro",
+    });
 
     return ok(res, row);
   } catch (error) {
@@ -3186,6 +3471,21 @@ app.put("/solicitudes-cambio-turno/:id/aprobar", requireAdmin, async (req, res) 
       [id]
     );
 
+    await Promise.all([
+      crearNotificacion({
+        medico_id: solicitud.medico_solicitante_id,
+        titulo: "Cambio de turno aprobado",
+        mensaje: `Tu cambio de turno del ${solicitud.fecha_origen} fue aprobado.`,
+        tipo: "cambio_turno",
+      }),
+      crearNotificacion({
+        medico_id: solicitud.medico_destino_id,
+        titulo: "Cambio de turno aprobado",
+        mensaje: `Se aprobó un cambio de turno contigo para el ${solicitud.fecha_destino}.`,
+        tipo: "cambio_turno",
+      }),
+    ]);
+
     return ok(res, actualizada);
   } catch (error) {
     return fail(res, error);
@@ -3229,6 +3529,13 @@ app.put("/solicitudes-cambio-turno/:id/rechazar", requireAdmin, async (req, res)
       "SELECT * FROM solicitudes_cambio_turno WHERE id = ?",
       [id]
     );
+
+    await crearNotificacion({
+      medico_id: solicitud.medico_solicitante_id || solicitud.medico_id,
+      titulo: "Cambio de turno rechazado",
+      mensaje: comentario || `Coordinación rechazó tu solicitud de cambio del ${solicitud.fecha_origen}.`,
+      tipo: "cambio_turno",
+    });
 
     return ok(res, row);
   } catch (error) {
@@ -3454,6 +3761,21 @@ app.put("/solicitudes-cesion-turno/:id/aprobar", requireAdmin, async (req, res) 
       [id]
     );
 
+    await Promise.all([
+      crearNotificacion({
+        medico_id: solicitud.medico_solicitante_id,
+        titulo: "Cesión de turno aprobada",
+        mensaje: `Tu cesión del ${solicitud.fecha} fue aprobada.`,
+        tipo: "cesion_turno",
+      }),
+      crearNotificacion({
+        medico_id: solicitud.medico_receptor_id,
+        titulo: "Cesión de turno recibida",
+        mensaje: `Recibiste un turno ${solicitud.tipo_turno} para el ${solicitud.fecha}.`,
+        tipo: "cesion_turno",
+      }),
+    ]);
+
     return ok(res, actualizada);
   } catch (error) {
     return fail(res, error);
@@ -3497,6 +3819,13 @@ app.put("/solicitudes-cesion-turno/:id/rechazar", requireAdmin, async (req, res)
       "SELECT * FROM solicitudes_cesion_turno WHERE id = ?",
       [id]
     );
+
+    await crearNotificacion({
+      medico_id: solicitud.medico_solicitante_id || solicitud.medico_id,
+      titulo: "Cesión de turno rechazada",
+      mensaje: comentario || `Coordinación rechazó tu solicitud de cesión del ${solicitud.fecha}.`,
+      tipo: "cesion_turno",
+    });
 
     return ok(res, row);
   } catch (error) {
@@ -3617,6 +3946,13 @@ app.put("/solicitudes-horario/:id/aprobar", requireAdmin, async (req, res) => {
       id,
     ]);
 
+    await crearNotificacion({
+      medico_id: solicitud.medico_id,
+      titulo: "Solicitud de horario aprobada",
+      mensaje: `Coordinación aprobó tu solicitud de programación para ${solicitud.mes || solicitud.mes_programacion || "el próximo mes"}.`,
+      tipo: "solicitud_horario",
+    });
+
     return ok(res, row);
   } catch (error) {
     return fail(res, error);
@@ -3658,6 +3994,13 @@ app.put("/solicitudes-horario/:id/rechazar", requireAdmin, async (req, res) => {
     const row = await get("SELECT * FROM solicitudes_horario WHERE id = ?", [
       id,
     ]);
+
+    await crearNotificacion({
+      medico_id: solicitud.medico_id,
+      titulo: "Solicitud de horario rechazada",
+      mensaje: comentario || "Coordinación rechazó tu solicitud de horario.",
+      tipo: "solicitud_horario",
+    });
 
     return ok(res, row);
   } catch (error) {
