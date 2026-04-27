@@ -6766,6 +6766,8 @@ const S = {
     borderRadius: 12,
     padding: 10,
     minHeight: 118,
+    minWidth: 0,
+    overflow: "hidden",
   },
 
   medicoDayHead: {
@@ -6792,6 +6794,7 @@ const S = {
     display: "flex",
     flexDirection: "column",
     gap: 5,
+    minWidth: 0,
   },
 
   medicoFreeChip: {
@@ -6804,6 +6807,8 @@ const S = {
     fontWeight: 800,
     display: "flex",
     gap: 4,
+    minWidth: 0,
+    overflow: "hidden",
   },
 
   medicoShiftChip: (tipo) => ({
@@ -6817,6 +6822,12 @@ const S = {
     alignItems: "center",
     gap: 4,
     border: `1px solid ${tipo.color}33`,
+    minWidth: 0,
+    maxWidth: "100%",
+    overflow: "hidden",
+    whiteSpace: "nowrap",
+    textOverflow: "ellipsis",
+    justifyContent: "center",
   }),
 
   medicoExtraChip: {
@@ -6830,6 +6841,10 @@ const S = {
     alignItems: "center",
     gap: 4,
     border: "1px solid #374151",
+    minWidth: 0,
+    overflow: "hidden",
+    whiteSpace: "nowrap",
+    justifyContent: "center",
   },
 
   medicoDayTotal: {
@@ -6883,18 +6898,25 @@ const S = {
 
   coordDayActions: {
     display: "grid",
-    gridTemplateColumns: "repeat(3, 1fr)",
-    gap: 5,
+    gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+    gap: 4,
     marginTop: 8,
+    width: "100%",
+    minWidth: 0,
   },
 
   quickShiftButton: (tipo, disabled) => ({
+    width: "100%",
+    minWidth: 0,
+    maxWidth: "100%",
     background: disabled ? "#111827" : tipo.bg,
     color: disabled ? "#475569" : tipo.color,
     border: `1px solid ${disabled ? "#1f2937" : `${tipo.color}55`}`,
     borderRadius: 7,
     minHeight: 28,
-    fontSize: 13,
+    padding: 0,
+    fontSize: 12,
+    lineHeight: 1,
     fontWeight: 900,
     cursor: disabled ? "not-allowed" : "pointer",
     opacity: disabled ? 0.55 : 1,
