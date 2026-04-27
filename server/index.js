@@ -572,7 +572,7 @@ function buildAuthResponse(usuario, medico = null, overrides = {}) {
 
 function requireAuth(req, res, next) {
   const header = req.headers.authorization || "";
-  const token = header.startsWith("Bearer ") ? header.slice(7) : "";
+  const token = header.startsWith("Bearer ") ? header.slice(7) : cleanText(req.query.token);
   const payload = verifyToken(token);
 
   if (!payload) {

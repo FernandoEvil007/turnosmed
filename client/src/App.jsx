@@ -269,6 +269,14 @@ function capFirst(text = "") {
   return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
+function nombreApellidoInicial(med = {}) {
+  const nombre = String(med.nombre || "").trim();
+  const apellido = String(med.apellido || "").trim();
+  const inicialApellido = apellido ? `${apellido[0].toUpperCase()}.` : "";
+
+  return [nombre, inicialApellido].filter(Boolean).join(" ") || "Médico";
+}
+
 function formatCOP(valor) {
   const n = Number(valor);
 
@@ -1870,35 +1878,19 @@ export default function App() {
         mes: String(m + 1),
       });
 
+      if (token) params.set("token", token);
       if (medicoId) params.set("medico_id", String(medicoId));
 
-      const res = await fetch(`${API_URL}/calendario/export/excel?${params.toString()}`, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      });
-
-      if (!res.ok) {
-        let data = null;
-        try {
-          data = await res.json();
-        } catch {
-          data = null;
-        }
-        throw new Error(data?.error || "No se pudo exportar el calendario");
-      }
-
-      const blob = await res.blob();
-      const disposition = res.headers.get("Content-Disposition") || "";
-      const match = disposition.match(/filename="([^"]+)"/);
-      const filename = match?.[1] || `calendario-turnos-${y}-${String(m + 1).padStart(2, "0")}.xlsx`;
-      const url = URL.createObjectURL(blob);
+      const url = `${API_URL}/calendario/export/excel?${params.toString()}`;
       const link = document.createElement("a");
 
       link.href = url;
-      link.download = filename;
+      link.download = `calendario-turnos-${y}-${String(m + 1).padStart(2, "0")}.xlsx`;
+      link.target = "_blank";
+      link.rel = "noopener";
       document.body.appendChild(link);
       link.click();
       link.remove();
-      URL.revokeObjectURL(url);
       showToast("Calendario exportado a Excel");
     } catch (error) {
       console.error(error);
@@ -1950,19 +1942,35 @@ export default function App() {
             <thead><tr><th>Médico</th>${encabezados}</tr></thead>
             <tbody>${filas}</tbody>
           </table>
-          <script>window.onload = () => window.print();</script>
         </body>
       </html>
     `;
-    const win = window.open("", "_blank");
+    const iframe = document.createElement("iframe");
+    iframe.style.position = "fixed";
+    iframe.style.right = "0";
+    iframe.style.bottom = "0";
+    iframe.style.width = "0";
+    iframe.style.height = "0";
+    iframe.style.border = "0";
+    document.body.appendChild(iframe);
 
-    if (!win) {
-      showToast("El navegador bloqueó la ventana de impresión", "err");
+    const doc = iframe.contentWindow?.document;
+
+    if (!doc) {
+      iframe.remove();
+      showToast("No se pudo preparar el PDF", "err");
       return;
     }
 
-    win.document.write(html);
-    win.document.close();
+    doc.open();
+    doc.write(html);
+    doc.close();
+
+    setTimeout(() => {
+      iframe.contentWindow?.focus();
+      iframe.contentWindow?.print();
+      setTimeout(() => iframe.remove(), 1000);
+    }, 250);
   }
 
   async function enviarSolicitudCambioTurno() {
@@ -3994,6 +4002,7 @@ function CalendarioGlobalMedicos({
                       {asignados.length === 0 && <span style={S.medicoFreeChip}>Libre</span>}
                       {visibles.map(({ med, tipos }) => {
                         const nombre = `${med.nombre || ""} ${med.apellido || ""}`.trim();
+                        const nombreCorto = nombreApellidoInicial(med);
                         const detalle = `${nombre} · ${med.especialidad || "Sin especialidad"} · ${tipos
                           .map((tipo) => TIPOS_TURNO[tipo]?.label)
                           .filter(Boolean)
@@ -4013,8 +4022,7 @@ function CalendarioGlobalMedicos({
                             </Av>
                             <div style={{ minWidth: 0 }}>
                               <div style={S.globalDoctorInitials}>
-                                {med.nombre?.[0]}
-                                {med.apellido?.[0]}
+                                {nombreCorto}
                               </div>
                               <div style={S.globalDoctorTurns}>
                                 {tipos.map((tipo) => TIPOS_TURNO[tipo]?.label).join(" + ")}
