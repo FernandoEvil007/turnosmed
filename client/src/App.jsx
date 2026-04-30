@@ -1804,6 +1804,27 @@ export default function App() {
     }
   }
 
+  async function eliminarHorasAdicionalesCoord(medicoId, fecha) {
+    try {
+      await api("/horas-adicionales", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ medico_id: medicoId, fecha }),
+      });
+
+      setHorasAdicionales((prev) => {
+        const next = { ...prev };
+        delete next[`${medicoId}_${fecha}`];
+        return next;
+      });
+
+      showToast("Horas adicionales eliminadas ✓");
+    } catch (error) {
+      console.error(error);
+      showToast(error.message || "No se pudieron eliminar las horas adicionales", "err");
+    }
+  }
+
   async function descargarBackup() {
     try {
       const token = localStorage.getItem("authToken");
@@ -2832,6 +2853,7 @@ export default function App() {
             horasDiaTotal={horasDiaTotal}
             agregarTurnoCoord={agregarTurnoCoord}
             eliminarTurnoCoord={eliminarTurnoCoord}
+            eliminarHorasAdicionalesCoord={eliminarHorasAdicionalesCoord}
             descargarCalendarioExcel={descargarCalendarioExcel}
             exportarCalendarioPdf={exportarCalendarioPdf}
           />
@@ -5071,6 +5093,7 @@ function VistaCalendario({
   horasDiaTotal,
   agregarTurnoCoord,
   eliminarTurnoCoord,
+  eliminarHorasAdicionalesCoord,
 }) {
   const [medicoCalendarioId, setMedicoCalendarioId] = useState("");
   const medicoSeleccionado =
@@ -5256,6 +5279,7 @@ function VistaCalendario({
               horasDiaTotal={horasDiaTotal}
               agregarTurnoCoord={agregarTurnoCoord}
               eliminarTurnoCoord={eliminarTurnoCoord}
+              eliminarHorasAdicionalesCoord={eliminarHorasAdicionalesCoord}
             />
           )}
         </div>
@@ -5400,6 +5424,7 @@ function CalendarioMedicoCoordinador({
   horasDiaTotal,
   agregarTurnoCoord,
   eliminarTurnoCoord,
+  eliminarHorasAdicionalesCoord,
   descargarCalendarioExcel,
   exportarCalendarioPdf,
 }) {
@@ -5476,10 +5501,16 @@ function CalendarioMedicoCoordinador({
                 ))}
 
                 {extra > 0 && (
-                  <div className="tm-medico-shift-chip" style={S.medicoExtraChip}>
+                  <button
+                    type="button"
+                    className="tm-medico-shift-chip"
+                    style={{ ...S.medicoExtraChip, cursor: "pointer" }}
+                    onClick={() => eliminarHorasAdicionalesCoord(medico.id, f)}
+                    title="Clic para quitar estas horas adicionales"
+                  >
                     <span>+</span>
                     <span>{extra}h</span>
-                  </div>
+                  </button>
                 )}
               </div>
 

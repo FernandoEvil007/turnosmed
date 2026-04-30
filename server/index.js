@@ -2273,6 +2273,30 @@ app.post("/horas-adicionales", requireAdmin, async (req, res) => {
   }
 });
 
+app.delete("/horas-adicionales", requireAdmin, async (req, res) => {
+  try {
+    const medico_id = Number(req.body.medico_id);
+    const fecha = cleanText(req.body.fecha);
+
+    if (!medico_id || !fecha) {
+      return fail(res, new Error("Médico y fecha son obligatorios"), 400);
+    }
+
+    if (!canManageMedico(req, medico_id)) {
+      return fail(res, new Error("No puedes modificar datos de otro médico"), 403);
+    }
+
+    await run("DELETE FROM horas_adicionales WHERE medico_id = ? AND fecha = ?", [
+      medico_id,
+      fecha,
+    ]);
+
+    return ok(res, { message: "Horas adicionales eliminadas", medico_id, fecha });
+  } catch (error) {
+    return fail(res, error);
+  }
+});
+
 async function guardarHorasAdicionalesAprobadas({ medico_id, fecha, horas, motivo }) {
   const existente = await get(
     `
